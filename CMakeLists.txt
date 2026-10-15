@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.20)
 
-project(cpp_workflow_demo
+project(noteAll
     VERSION 0.1.0
     DESCRIPTION "个人时间轴记事本"
     LANGUAGES CXX)

@@ -2,6 +2,9 @@
 
 > 目标：用 C++ 开发一款个人可用的时间轴记事工具，同时作为 C++ 学习项目。
 > 核心能力：自然语言 → 结构化时间轴条目（LLM 辅助）+ 集合/标签筛选。
+>
+> **仓库**：<https://github.com/aXiangRui/noteAll>（公开）　**CMake 工程名**：`noteAll`
+> ⚠️ 本地目录名仍是 `cpp_workflow_demo`（占位名，改目录名会让 `build/CMakeCache.txt` 里的绝对路径失效，要重配）。
 
 ---
 
