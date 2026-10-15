@@ -1,0 +1,14 @@
+{
+  // ---- CMake Tools ----
+  "cmake.generator": "Visual Studio 17 2022",
+  "cmake.buildDirectory": "${workspaceFolder}/build",
+  "cmake.configureOnOpen": true,
+
+  // 让 CMake Tools 给 C/C++ 扩展喂 IntelliSense 信息（include 路径、宏、标准）
+  // 这样就不用把 MSVC 的路径硬编码进来了
+  "C_Cpp.default.configurationProvider": "ms-vscode.cmake-tools",
+  "C_Cpp.default.cppStandard": "c++20",
+
+  // 中文必需：源码一律按 UTF-8 读写（DESIGN.md §8.1）
+  "files.encoding": "utf8"
+}
