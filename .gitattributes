@@ -1,0 +1,11 @@
+# 换行符统一：仓库里和工作区里都用 LF。
+#
+# 不写这个的话，本机 Git for Windows 的系统级 core.autocrlf=true 会在 checkout 时
+# 把 LF 换成 CRLF，于是冒出一堆噪音：
+#   1) 每次 git add 都警告 "LF will be replaced by CRLF the next time Git touches it"
+#   2) 编辑器保存后 git 认为"整个文件都改了"，其实只差行尾 —— diff 没法看
+#
+# text=auto 让 git 自己判断哪些是文本；eol=lf 指定文本文件在工作区里也是 LF。
+# MSVC 两种行尾都能编（C++ 标准把换行当空白），仓库里现有内容本来就是 LF，
+# 所以统一成 LF 不会引发大 diff，也不会改变任何源文件的语义。
+* text=auto eol=lf

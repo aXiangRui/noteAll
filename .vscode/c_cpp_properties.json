@@ -3,7 +3,7 @@
   "configurations": [
     {
       // 首选：由 CMake Tools 自动生成 IntelliSense 配置
-      "name": "MSVC x64 (C++20)",
+      "name": "MSVC x64 (C++23)",
       "configurationProvider": "ms-vscode.cmake-tools",
 
       // 下面几项是 CMake Tools 缺席时的兜底
@@ -12,7 +12,8 @@
         "${workspaceFolder}/third_party"
       ],
       "cStandard": "c17",
-      "cppStandard": "c++20",
+      // 与 CMakeLists.txt 的 CMAKE_CXX_STANDARD 23 保持一致（见 DESIGN.md §0.2）
+      "cppStandard": "c++23",
       "intelliSenseMode": "windows-msvc-x64"
     }
   ]

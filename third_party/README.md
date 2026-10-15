@@ -26,7 +26,12 @@ sha256sum third_party/nlohmann/json.hpp third_party/doctest/doctest.h
 
 ## 重新下载（GitHub 直连不通时）
 
-本机实测 **github.com 与 raw.githubusercontent.com 均不可达**，`gh-proxy.com` 可用：
+> ⚠️ **2026-10-15 复测：本机现在直连 GitHub 是通的**（`api.github.com` / `github.com` /
+> `raw.githubusercontent.com` 均 HTTPS 200，`git push` 直连成功），
+> 所以下面的代理命令**平时不需要**，只在网络又不通时用。
+> （唯一不通的是 SSH 22 端口，见 [DESIGN.md §7](../DESIGN.md)。）
+
+早期实测 **github.com 与 raw.githubusercontent.com 均不可达**，`gh-proxy.com` 可用：
 
 ```bash
 curl -fsSL -o third_party/nlohmann/json.hpp \

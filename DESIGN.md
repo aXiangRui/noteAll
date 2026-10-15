@@ -339,9 +339,17 @@ note list --since 2026-09-01
 
 ### 网络注意
 
-本机实测 **github.com 与 raw.githubusercontent.com 不可达**（国内网络常见情况，非配置错误），
-`gh-proxy.com` 可用。清华/中科大的 `github-release` 镜像未收录这两个库。
-详见 [third_party/README.md](third_party/README.md)。
+> ⚠️ **下面的记录已经过期，别再照着它绕路（2026-10-15 实测）**：
+> `api.github.com`、`github.com`、`raw.githubusercontent.com` 在本机**都通**（HTTPS 200），
+> `git push` 直连成功（仓库地址见本文开头）。**不需要代理。**
+>
+> 唯一不通的是 **SSH 的 22 端口**（`ssh -T git@github.com` 报 `Connection refused`），
+> 所以 git 走 **HTTPS**（凭据由 Git Credential Manager 管）。真要用 SSH，就在
+> `~/.ssh/config` 里写 `Host github.com` → `HostName ssh.github.com` + `Port 443`。
+
+**原记录（保留以备网络再变）**：早期实测 github.com 与 raw.githubusercontent.com 不可达，
+`gh-proxy.com` 可用，清华/中科大的 `github-release` 镜像未收录这两个库。
+详见 [third_party/README.md](third_party/README.md)（那份里留着代理下载命令）。
 
 ---
 

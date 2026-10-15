@@ -7,7 +7,9 @@
   // 让 CMake Tools 给 C/C++ 扩展喂 IntelliSense 信息（include 路径、宏、标准）
   // 这样就不用把 MSVC 的路径硬编码进来了
   "C_Cpp.default.configurationProvider": "ms-vscode.cmake-tools",
-  "C_Cpp.default.cppStandard": "c++20",
+  // ⚠️ 必须和 CMakeLists.txt 的 CMAKE_CXX_STANDARD 一致（那是 23）：
+  // 写成 c++20 的话，std::expected 这类 C++23 的东西会被 IntelliSense 误报红波浪线
+  "C_Cpp.default.cppStandard": "c++23",
 
   // 中文必需：源码一律按 UTF-8 读写（DESIGN.md §8.1）
   "files.encoding": "utf8"
