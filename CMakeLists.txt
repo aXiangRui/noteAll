@@ -47,7 +47,9 @@ endif()
 # 到 M2 需要 cpr（依赖 libcurl）时，再引入 vcpkg。
 # ---------------------------------------------------------------------------
 add_library(third_party INTERFACE)
-target_include_directories(third_party INTERFACE
+# SYSTEM：第三方头文件里的警告（nlohmann 就有一个 C4459）不该算到我们头上，
+# 也不该为了它去改 vendor 进来的源码。
+target_include_directories(third_party SYSTEM INTERFACE
     ${CMAKE_CURRENT_SOURCE_DIR}/third_party)
 
 # ---------------------------------------------------------------------------

@@ -69,10 +69,28 @@ void to_json(nlohmann::json& j, const TimeRange& t)
 
 void from_json(const nlohmann::json& j, TimeRange& t)
 {
-    
-    fromIso(j.value("start", std::string{}), t.start);
+    // start 是必填字段，而且必须是合法时间。
+    //
+    // 以前这里忽略了 fromIso 的返回值：{"start":"garbage"} 会静默变成
+    // 1970-01-01，既不报错也没 warning —— 一条坏数据看起来像"确实发生在 1970 年"。
+    // 现在改成抛 json::exception，由 load() 统一收成 warning 并跳过该行。
+    // 跳过是安全的：load 不重写文件，原始那一行还在磁盘上。
+    if (!j.contains("start") || !j["start"].is_string())
+    {
+        throw nlohmann::json::other_error::create(
+            501, "occurred.start 缺失或不是字符串", &j);
+    }
 
-    t.end.reset();  
+    std::chrono::sys_seconds start{};
+    if (!fromIso(j["start"].get<std::string>(), start))
+    {
+        throw nlohmann::json::other_error::create(
+            501, "occurred.start 不是合法的 ISO 8601 时间", &j);
+    }
+    t.start = start;
+
+    // end 可选。写坏了就当"没有终点"（时间点），不因为一个可选字段丢掉整行。
+    t.end.reset();
     if (j.contains("end") && j["end"].is_string())
     {
         std::chrono::sys_seconds end{};
@@ -131,8 +149,17 @@ std::expected<LoadResult, std::string> load(const std::filesystem::path& path)
 {
     LoadResult result;
 
+    // exists() 的 ec 必须判。权限 / IO 错误以前会被当成"文件不存在"，
+    // 返回成功 + 空列表 —— 用户看到"（还没有记录）"，以为数据丢了。
+    // 现在真正区分：不存在 -> 成功空列表（首次运行的正常情况）；
+    // 查不了 -> 失败，由上层报错。
     std::error_code ec;
-    if (!std::filesystem::exists(path, ec))
+    const bool fileExists = std::filesystem::exists(path, ec);
+    if (ec)
+    {
+        return std::unexpected("检查文件失败: " + path.string() + " (" + ec.message() + ")");
+    }
+    if (!fileExists)
     {
         return result;
     }

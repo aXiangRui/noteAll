@@ -327,21 +327,20 @@ bool fromIso(std::string_view s, std::chrono::sys_seconds& out);   // 失败返�
 | 7 | 给 `Entry` 加字段后读旧文件 | 不失败，新字段取默认值 |
 | 8 | `save` 时目标已存在 | 被正常覆盖（原子替换） |
 
-> ### ⚠️ 现状：这 8 条**一条测试都没有**
+> ### ✅ 现状：8 条规格全部有测试（2026-10-18）
 >
-> `tests/test_store.cpp` 目前是 7 行注释、0 个用例。也就是说：
-> 全项目 438 条断言**全部来自 parse**，而"唯一错了会静默丢数据"的这一层是裸奔的。
-> 这是当前最该补的一件事（§2.11 第 3 条）。
+> `tests/test_store.cpp` 现在逐条覆盖上表 1–8，另加 ISO 往返、坏 `occurred.start`、
+> 空行/CRLF、路径是目录等边界；`tests/test_core.cpp` 覆盖 `Core` 门面
+> （原文不变、倒序、稳定排序、find/remove、落盘、id 唯一）。
+> 全项目现在是 **88 个用例 / 738 条断言**。
 >
-> **另外，实现里有两个静默问题（2026-10-14 实测）：**
+> **2026-10-14 记录的两个静默问题都已修掉，并由测试守住：**
 >
-> 1. **`from_json(TimeRange)` 忽略了 `fromIso` 的返回值** ——
->    `{"occurred":{"start":"garbage"}}` 这种坏数据会**静默变成 1970-01-01**，
->    不出 warning、不报错（`created_at` 和 `end` 都检查了，只有 `start` 漏了）。
->    实测：`note show <id>` 打印 `发生时间: 1970-01-01 08:00`。
-> 2. **`load()` 里 `std::filesystem::exists(path, ec)` 的 `ec` 从未检查** ——
->    权限/IO 错误会被当成"文件不存在"，于是返回**成功 + 空列表**，
->    用户以为数据没了（与规格第 1 条"文件不存在 → 成功"混在一起，无法区分）。
+> 1. **`from_json(TimeRange)` 忽略 `fromIso` 返回值** —— 已改：`start` 缺失或非法时
+>    抛 `json::exception`，`load()` 收成 warning 并跳过该行（load 不重写文件，
+>    原始行仍在磁盘上）。测试：`store：occurred.start 非法 -> ...`。
+> 2. **`load()` 忽略 `exists(path, ec)` 的 `ec`** —— 已改：真错误返回 `unexpected`，
+>    与"文件不存在 → 成功空列表"区分开。测试：`store：路径是目录 -> 读失败`。
 >
 > 还欠一个 `save()` 的契约说明：它声明返回 `expected`，但
 > `nlohmann::json(e).dump()` 遇到**非法 UTF-8 会抛异常**（见 [nlohmann-json.md §6](nlohmann-json.md)）。
@@ -787,9 +786,9 @@ M0/M1 的功能都在，但下面这些"洞"还在。**按建议处理顺序排�
 
 | # | 事项 | 证据 / 影响 | 建议 |
 |---|---|---|---|
-| 1 | **`tests/test_store.cpp` 是空的** | 7 行注释、0 个用例；全项目 438 条断言全来自 parse；而存储层是唯一"错了会静默丢数据"的地方 | **最优先**。照 §2.3 那 8 条规格逐条写用例，先红后绿 |
-| 2 | **`from_json(TimeRange)` 忽略 `fromIso` 返回值** | 坏数据静默变 1970-01-01，无 warning。`created_at` / `end` 都检查了，只有 `start` 漏了 | 一行的事：检查返回值并让 `load()` 收一条 warning |
-| 3 | **`load()` 里 `exists(path, ec)` 的 `ec` 从未检查** | 权限/IO 错误被当成"文件不存在"→ 返回成功空列表，用户以为数据没了 | 判 `ec`，真错误走 `unexpected` |
+| 1 | ~~**`tests/test_store.cpp` 是空的**~~ | ✅ 2026-10-18 已补：§2.3 的 8 条规格逐条有测试，另加 `tests/test_core.cpp`；全项目 88 用例 / 738 断言 | — |
+| 2 | ~~**`from_json(TimeRange)` 忽略 `fromIso` 返回值**~~ | ✅ 已改：非法 `start` 抛异常 → `load()` 收 warning 并跳过该行 | 测试已覆盖 |
+| 3 | ~~**`load()` 里 `exists(path, ec)` 的 `ec` 从未检查**~~ | ✅ 已改：真错误返回 `unexpected`，不再伪装成空列表 | 测试已覆盖 |
 | 4 | ~~**`parseTime` 没接进 `note add`**~~ | ✅ 2026-10-18 已接线：`note add` 现在会落 `occurred`，空格和时区转换一并处理 | — |
 | 5 | **`include/core/view.hpp` 是死文件** | 旧版 `View` 残骸，全仓库无人 include，**而且没有虚析构**（正是 DESIGN.md §4.2 警告的那个坑） | 删掉。与 §2.0 (c) 的 `include/core.hpp` 同类 |
 | 6 | **`git` 仓库零提交** | `git log` 报 "does not have any commits yet"，所有文件都是 untracked | **动手改代码前先 `git add -A && git commit`**，否则没有 diff、没法回滚 |

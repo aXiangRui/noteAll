@@ -1,6 +1,7 @@
 add_executable(tests
     main.cpp            # doctest 的 main 入口（别往里加用例）
-    test_store.cpp
+    test_store.cpp      # JSONL 持久化
+    test_core.cpp       # Core 门面
     test_parse.cpp)
 
 target_link_libraries(tests PRIVATE core parse)
