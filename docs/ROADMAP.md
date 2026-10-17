@@ -502,8 +502,12 @@ public:
     // 上面 load 跳过的坏行说明
     const std::vector<std::string>& warnings() const;
 
-    // 追加一条：生成 id + created_at(UTC)，然后落盘。返回写好的 Entry。
-    std::expected<Entry, std::string> add(std::string_view raw_text);
+    // 追加一条：生成 id，然后落盘。返回写好的 Entry。
+    // created_at 由调用方传入（parse 的 base 必须和它同一个时刻）；
+    // occurred 是解析结果，core 不认识 parse。
+    std::expected<Entry, std::string> add(std::string_view        raw_text,
+                                          std::chrono::sys_seconds created_at,
+                                          std::optional<TimeRange> occurred = std::nullopt);
 
     // 按 created_at 倒序（新的在前）
     const std::vector<Entry>& list() const;
@@ -669,15 +673,19 @@ $ note rm 0193a4b2c7d1
 - `load()` 失败 → `v.RenderError(...)` + `return 2`（实际实现里变量就叫 `v`）
 - `load()` 成功后如果有 warnings，**打出来但继续跑**（文件有坏行不该拦住你记事）
 
-**⚠️ 两个现状提醒**：
+**✅ 两个现状提醒都已解决（2026-10-18）**：
 
-1. **`parseTime` 还没接进来**：`note add` 存进去的 `occurred` 一直是空的
-   （`core.cpp` 的 `add` 里留着 `// 等 M1 的 parseTime 来填`）。
-   M1 做完了"能解析"，但**没做"接进 CLI"** —— 这是 M1 的最后一段路，见 §2.11 第 4 条。
-2. **上面那条"用空格拼接"在接线时会咬人**：`note add 明天 下午3点` 拼出来是
-   `明天 下午3点`（中间有空格），而 `parseTime` 的后缀**必须紧跟在主体后面**，
-   于是时刻解析不出来。`note add 明天下午3点` 没这个问题。
-   接 parse 之前，要么先解决空格，要么接受这个限制并写进文档。
+1. ~~`parseTime` 还没接进来~~：`main.cpp` 的 `add` 分支先定 `created_at`，
+   再 `parseTime(text, 本地墙上时间)`，解析结果换回 UTC 后交给 `core::add`。
+   `occurred` 现在会落盘，`note show` 能看到。
+2. ~~"用空格拼接"会咬人~~：`parseTime` 现在允许主体与后缀之间、以及「到」两边
+   有空格 —— `note add 明天 下午3点` 和 `明天下午3点` 等价。
+   跳过的空格算进被吃掉的区间，不进 `remainder`。
+
+> ⚠️ 接线时发现的新坑（已处理）：`parseTime` 是时区无关的墙上时钟运算，
+> 而 `occurred` 要存 UTC。直接拿 UTC 的 `created_at` 当 base，在 UTC+8 机器上
+> 「今天」会变成昨天、「下午3点」会显示成晚上11点。CLI 层在解析前后各做一次
+> `zoned_time` 转换（见 `main.cpp` 的 `utcToLocalWall` / `localWallToUtc`）。
 
 ---
 
@@ -782,12 +790,12 @@ M0/M1 的功能都在，但下面这些"洞"还在。**按建议处理顺序排�
 | 1 | **`tests/test_store.cpp` 是空的** | 7 行注释、0 个用例；全项目 438 条断言全来自 parse；而存储层是唯一"错了会静默丢数据"的地方 | **最优先**。照 §2.3 那 8 条规格逐条写用例，先红后绿 |
 | 2 | **`from_json(TimeRange)` 忽略 `fromIso` 返回值** | 坏数据静默变 1970-01-01，无 warning。`created_at` / `end` 都检查了，只有 `start` 漏了 | 一行的事：检查返回值并让 `load()` 收一条 warning |
 | 3 | **`load()` 里 `exists(path, ec)` 的 `ec` 从未检查** | 权限/IO 错误被当成"文件不存在"→ 返回成功空列表，用户以为数据没了 | 判 `ec`，真错误走 `unexpected` |
-| 4 | **`parseTime` 没接进 `note add`** | `occurred` 永远是空的（M1 只完成"能解析"，没完成"用上"） | 接线时先解决 §2.6 提到的空格问题 |
+| 4 | ~~**`parseTime` 没接进 `note add`**~~ | ✅ 2026-10-18 已接线：`note add` 现在会落 `occurred`，空格和时区转换一并处理 | — |
 | 5 | **`include/core/view.hpp` 是死文件** | 旧版 `View` 残骸，全仓库无人 include，**而且没有虚析构**（正是 DESIGN.md §4.2 警告的那个坑） | 删掉。与 §2.0 (c) 的 `include/core.hpp` 同类 |
 | 6 | **`git` 仓库零提交** | `git log` 报 "does not have any commits yet"，所有文件都是 untracked | **动手改代码前先 `git add -A && git commit`**，否则没有 diff、没法回滚 |
 | 7 | **`view` 接口/命名与文档不一致** | `View` vs `IView`、`Render*` vs `show*`、没做 `ostream&` 注入 | 二选一：改代码 或 保留现状（本文已按现状改写，见 §0.3 / §2.4） |
 | 8 | **`RenderError` 兼任 warning** | 坏行跳过会顶着 `错误: ` 打印，退出码却是 0 | 给接口加 `RenderWarning`，或明确接受 |
-| 9 | **`unitWords` / `timeWords` 两张死词表** | 声明了但无任何引用，见 [parse-time.md §3.3](parse-time.md) | 删，或保留并在头注释里写明"未生效" |
+| 9 | ~~**`unitWords` / `timeWords` 两张死词表**~~ | ✅ 2026-10-17 已删除，全仓库 0 引用 | — |
 | 10 | 仓库卫生 | `reesources/`（拼写错）、`save/`（空目录）、根目录 `vc.log`（构建日志，含 vswhere 报错） | 删 |
 
 > 顺序的理由：**1–3 是"会静默坏数据"的**，4 是功能缺口，5–10 是卫生问题。
@@ -795,7 +803,7 @@ M0/M1 的功能都在，但下面这些"洞"还在。**按建议处理顺序排�
 
 ---
 
-## 3. M1 —— 时间解析 ✅ **已实现**（除了"接进 CLI"，见 §2.11 第 4 条）
+## 3. M1 —— 时间解析 ✅ **已完成**（2026-10-18 接进 CLI）
 
 **目标**：`note add "上周三 和小李讨论了方案"` → `occurred` 自动填上，且 `raw_text` 一个字不变。
 
@@ -833,11 +841,12 @@ ParseResult parseTime(std::string_view text, std::chrono::sys_seconds base);
 **硬要求**：
 - **解析不出就留空，绝不猜。** 宁可 `occurred` 为空，不要编一个时间。
   （[DESIGN.md §2.3 (c)](../DESIGN.md) + §8.3）
-- ✅ 20 个手写用例全过 —— **实际 62 个 / 438 条断言**，其中"应该解析失败"的用例有 7 组
+- ✅ 20 个手写用例全过 —— **实际 66 个 / 512 条断言**（2026-10-18 实跑），其中"应该解析失败"的用例有 7 组
 - ⬜ 中文数字（"三点"、"十点半"）先不做，M1.5 再说 —— **仍未做**（与计划一致）
 
-**验收**：✅ 62 个用例绿（远超 20 的要求）。
-⬜ 连续用一周，检查有没有"时间对了但文本被吃掉"。
+**验收**：✅ 66 个用例绿（远超 20 的要求）。
+✅ `note add "上周三 和小李讨论了方案"` → `occurred` 自动填上，`raw_text` 一个字不变（2026-10-18 端到端实跑）。
+⬜ 连续用一周，检查有没有"时间对了但文本被吃掉"（从 2026-10-18 接线后开始算）。
 `remainder` 必须能还原出原文——如果时间词抠错了，宁可不动文本。
 
 > 📖 **能解析什么、不能解析什么，看 [parse-time.md §3.5](parse-time.md)** ——

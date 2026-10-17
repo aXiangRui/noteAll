@@ -14,6 +14,22 @@ namespace parse
             return pos <= s.size() && s.substr(pos).starts_with(lit);
         }
 
+        // 跳过一段空白。
+        //
+        // 为什么需要：CLI 的 `note add 明天 下午3点` 会把 argv 用空格拼成
+        // 「明天 下午3点」，而解析器原本要求后缀**紧贴**主体。不做这一步，
+        // 用户按最自然的方式敲命令，时刻就丢了。
+        //
+        // 只跳 ASCII 空白。全角空格（U+3000）不跳 —— 它更可能是正文的一部分。
+        std::size_t skipSpaces(std::string_view s, std::size_t pos)
+        {
+            while( pos < s.size() && (s[pos] == ' ' || s[pos] == '\t') )
+            {
+                ++pos;
+            }
+            return pos;
+        }
+
         // 读十进制数字，返回 (值, 吃掉几个字节)。
         // 读到的位数少于 minDigits 就失败 —— 也顺手挡住了空串和"根本没数字"。
         std::optional<std::pair<int, std::size_t>> readNumber(std::string_view s, std::size_t minDigits, std::size_t maxDigits)
@@ -80,34 +96,51 @@ namespace parse
 
         // 时段词对钟点的修正结果：改完的小时 + 要不要顺延一天。
         //
-        // ⚠️ 12 点和 0 点是边界，不能拿"小于 12 就 +12"一把梭：
-        //     中午12点 / 下午12点 / 上午12点 -> 12:00（就是中午，不动）
-        //     凌晨12点                       -> 00:00（当天，凌晨是后半夜）
-        //     晚上12点                       -> 次日 00:00（晚上 12 点是这一天的 24 点）
-        //     晚上0点 / 0点                  -> 00:00（当天）
+        // ⚠️ 每个时段词的"有效钟点"不一样，不能拿"小于 12 就 +12"一把梭：
+        //     中午11点 / 中午12点             -> 11:00 / 12:00（照字面）
+        //     中午1点 / 中午2点               -> 13:00 / 14:00
+        //     中午9点                         -> 没这个说法，返回空
+        //     下午12点 / 上午12点             -> 12:00
+        //     凌晨12点                        -> 00:00（当天，凌晨是后半夜）
+        //     晚上6点..11点                   -> 18:00..23:00
+        //     晚上1点..5点                    -> 次日 01:00..05:00
+        //     晚上12点                        -> 次日 00:00（这一天的 24 点）
+        //     晚上0点 / 0点                   -> 00:00（当天）
+        //
+        // 为什么返回 optional：以前「中午9点」被算成 21:00 —— 又一个不报错的
+        // 12 小时偏移。中午的钟点只可能是 11、12、1、2，写别的不是"猜个近似"，
+        // 而是根本没这个说法，交给调用方整段不认。
         struct HourFix
         {
             int hour_;
             int dayOffset_;
         };
 
-        HourFix applyPeriod(int hour, std::string_view period)
+        std::optional<HourFix> applyPeriod(int hour, std::string_view period)
         {
             if( period == "晚上" )
             {
-                if( hour == 0 )  { return { 0, 0 }; }            // 晚上0点 = 当天零点
-                if( hour == 12 ) { return { 0, 1 }; }            // 晚上12点 = 次日零点
-                return { hour < 12 ? hour + 12 : hour, 0 };
+                if( hour == 0 )  { return HourFix{ 0, 0 }; }         // 晚上0点 = 当天零点
+                if( hour == 12 ) { return HourFix{ 0, 1 }; }         // 晚上12点 = 次日零点
+                if( hour >= 13 ) { return HourFix{ hour, 0 }; }      // 已经是 24 小时制
+                if( hour >= 6 )  { return HourFix{ hour + 12, 0 }; } // 晚上6..11点 = 18..23
+                return HourFix{ hour, 1 };                           // 晚上1..5点 = 次日凌晨
             }
-            if( period == "中午" || period == "下午" )
+            if( period == "中午" )
             {
-                return { hour < 12 ? hour + 12 : hour, 0 };
+                if( hour == 11 || hour == 12 ) { return HourFix{ hour, 0 }; }
+                if( hour == 1 || hour == 2 )   { return HourFix{ hour + 12, 0 }; }
+                return std::nullopt;                                 // 中午9点这种没这个说法
+            }
+            if( period == "下午" )
+            {
+                return HourFix{ hour < 12 ? hour + 12 : hour, 0 };
             }
             if( period == "凌晨" )
             {
-                return { hour == 12 ? 0 : hour, 0 };             // 凌晨12点 = 00:00
+                return HourFix{ hour == 12 ? 0 : hour, 0 };          // 凌晨12点 = 00:00
             }
-            return { hour, 0 };   // 早上 / 上午 / 没写时段词：照字面
+            return HourFix{ hour, 0 };   // 早上 / 上午 / 没写时段词：照字面
         }
 
         // 只试钟点本身，不试时段词。period 可以是空的 —— 空表示前面没写时段词。
@@ -124,13 +157,13 @@ namespace parse
                 }
                 // ⚠️ 这里也必须走 applyPeriod：「下午3:30」是 15:30，跟「下午3点半」一样。
                 // 这个分支以前直接 return，于是同一个意思两种写法差 12 小时，还不报错。
-                const HourFix fix = applyPeriod(h->first, period);
-                if( fix.hour_ > 23 )
+                const auto fix = applyPeriod(h->first, period);
+                if( !fix || fix->hour_ > 23 )
                 {
                     return std::nullopt;
                 }
-                return ClockHit{ std::chrono::minutes{ fix.hour_ * 60 + m->first },
-                                 fix.dayOffset_, minutePos + m->second };
+                return ClockHit{ std::chrono::minutes{ fix->hour_ * 60 + m->first },
+                                 fix->dayOffset_, minutePos + m->second };
             }
 
             // 形式乙：15点 / 9点半 / 15点30分
@@ -158,12 +191,12 @@ namespace parse
                 pos  += m->second + 3;
             }
 
-            const HourFix fix = applyPeriod(h->first, period);
-            if( fix.hour_ > 23 )
+            const auto fix = applyPeriod(h->first, period);
+            if( !fix || fix->hour_ > 23 )
             {
                 return std::nullopt;
             }
-            return ClockHit{ std::chrono::minutes{ fix.hour_ * 60 } + extra, fix.dayOffset_, pos };
+            return ClockHit{ std::chrono::minutes{ fix->hour_ * 60 } + extra, fix->dayOffset_, pos };
         }
 
         // 开头的时段词（可选）。命中就返回词，长度写进 length。
@@ -204,6 +237,15 @@ namespace parse
                 {
                     return std::nullopt;      // 既没时段词也没钟点
                 }
+
+                // 后面紧跟数字 = 用户明明写了钟点，只是它不合法（「中午9点」「下午25点」）。
+                // 这时不能只吃掉时段词、把它当成「下午」单独出现 —— 整段不认。
+                // 隐含时段（「昨晚」）不走这条：那时 pos 是 0，说明原文里根本没写时段词。
+                if( pos > 0 && pos < s.size() && s[pos] >= '0' && s[pos] <= '9' )
+                {
+                    return std::nullopt;
+                }
+
                 // 光有「下午」这种：取它的代表时刻
                 for( const auto& p : backWords )
                 {
@@ -238,23 +280,38 @@ namespace parse
                     continue;
                 }
 
-                // 「晚上11点到1点」：第二个钟点没写时段词，沿用「晚上」会把 1点 读成 13:00。
-                // 它比起点还早，只能靠跨天补救，跨度一下变成 14 小时 —— 显然不是这个意思。
-                // 于是改按字面读（1点 = 01:00），跨天之后只剩 2 小时。
-                //
-                // 「下午3点到5点」不受影响：17:00 本来就晚于 15:00，压根不需要跨天，
-                // 沿用时段词正是它对的原因。
+                // 第二个钟点比起点还早，分两种情形处理。
                 //
                 // ⚠️ 比大小必须带上 dayOffset_：「晚上11点半到12点半」的 12点半 是
                 // 次日 00:30（偏移 1470 分钟），光看 sinceMidnight_（30）会以为它更早，
                 // 回落成当天 12:30，区间直接歪掉 12 小时。
-                if( written.empty() && !period.empty() && offsetOf(*second) < offsetOf(*first) )
+                if( written.empty() && offsetOf(*second) < offsetOf(*first) )
                 {
-                    if( const auto literal = matchClockNumber(s.substr(secondStart + secondSkip), {}) )
+                    if( !period.empty() )
                     {
-                        if( offsetOf(*literal) < offsetOf(*first) )
+                        // 「晚上11点到1点」：第二个钟点没写时段词，沿用「晚上」会把 1点
+                        // 读成 13:00。它比起点还早，只能靠跨天补救，跨度一下变成 14 小时
+                        // —— 显然不是这个意思。于是改按字面读（1点 = 01:00），跨天之后只剩 2 小时。
+                        //
+                        // 「下午3点到5点」不受影响：17:00 本来就晚于 15:00，压根不需要跨天。
+                        if( const auto literal = matchClockNumber(s.substr(secondStart + secondSkip), {}) )
                         {
-                            second = literal;
+                            if( offsetOf(*literal) < offsetOf(*first) )
+                            {
+                                second = literal;
+                            }
+                        }
+                    }
+                    else
+                    {
+                        // 两边都没写时段词：「11点到1点」是 11:00–13:00，不是跨零点到
+                        // 次日 01:00（14 小时）。先在当天补 12 小时 —— 补完晚于起点就用它；
+                        // 补完还早（或超过 24 点）才交给下面的"终点早于起点就跨天"。
+                        const auto pm = second->sinceMidnight_ + std::chrono::hours{ 12 };
+                        if( pm > offsetOf(*first) && pm < std::chrono::hours{ 24 } )
+                        {
+                            second->sinceMidnight_ = pm;
+                            second->dayOffset_     = 0;
                         }
                     }
                 }
@@ -276,6 +333,9 @@ namespace parse
             std::chrono::sys_days day_;
             std::size_t           length_;
             std::string_view      impliedPeriod_{};   // 「昨晚」这种自带时段的词才填
+            // 年份是写出来的（含 今年 / 明年 / 去年），还是 pickYear 按"还没到的那个"猜的。
+            // 只有猜出来的年份才需要防"被推到下一年"（见 parseTime 里的区间检查）。
+            bool                  yearExplicit_{ true };
         };
 
         // 前缀 → 周 / 月的偏移。只有这四个搭得上；前 / 后 / 昨 / 今 / 明 / 去 返回空。
@@ -332,8 +392,8 @@ namespace parse
 
         // 匹配一整条「[周|星期|礼拜] + [一..日]」。
         //
-        // 单位词只走 weekUnits（三个），不走 unitWords（七个）——
-        // 多了 月/年/天/日 就会把「下月一号」当成「下周的周一」。
+        // 单位词只走 weekUnits（三个）—— 月/年/天/日 绝不能进来，
+        // 否则会把「下月一号」当成「下周的周一」。
         std::optional<WeekHit> matchWeekDay(std::string_view s, std::chrono::sys_days baseDay)
         {
             for( const std::string_view unit : weekUnits )
@@ -466,7 +526,7 @@ namespace parse
             }
             if( const auto t = pickYear((unsigned)mo->first, (unsigned)d->first, baseYear, floorDay) )
             {
-                return DateHit{ *t, pos };
+                return DateHit{ *t, pos, {}, false };   // 年份是猜的
             }
             return std::nullopt;
         }
@@ -644,11 +704,13 @@ namespace parse
         {
             for( const std::string_view sep : { "到", "至" } )
             {
-                if( !at(raw_text, pos, sep) )
+                // 「周一 到 周五」也认：CLI 拼参数时会在「到」两边留空格。
+                const std::size_t sepPos = skipSpaces(raw_text, pos);
+                if( !at(raw_text, sepPos, sep) )
                 {
                     continue;
                 }
-                const std::size_t secondStart = pos + sep.size();
+                const std::size_t secondStart = skipSpaces(raw_text, sepPos + sep.size());
                 // 第二个日期的"不许早于"是第一个日期，否则「周一到周五」会倒过来。
                 // 万一对出来的日期仍然更早（「明天到昨天」这种），就整个不吃这段区间 ——
                 // 宁可退回"单个日期 + 原文留在剩余里"，也不产出 end < start 的区间。
@@ -657,6 +719,19 @@ namespace parse
                 {
                     continue;
                 }
+
+                // 没写年份的日期，pickYear 会把它推到"还没到的那个"，可能整整推一年。
+                // 「3月5日到3月1日」于是变成跨一年的区间 —— 那是口误，不是跨年。
+                // 只在三件事同时成立时判为无效：年份是猜的、确实推到了下一年、跨度超过半年。
+                // 这样「12月31日到1月1日」（1 天）和写了年份的长区间都照常放行。
+                if( !second->yearExplicit_
+                    && std::chrono::year_month_day{ second->day_ }.year()
+                       > std::chrono::year_month_day{ date->day_ }.year()
+                    && second->day_ - date->day_ > std::chrono::days{ 183 } )
+                {
+                    continue;
+                }
+
                 dateEnd = second->day_;
                 pos     = secondStart + second->length_;
                 break;
@@ -664,11 +739,15 @@ namespace parse
         }
 
         // ── 后缀：时刻（可以带自己的时段词，也可以是个区间）──
-        const auto clock = matchClockRange(raw_text.substr(pos),
+        //
+        // 主体和时刻之间允许有空格：「明天 下午3点」。这是 CLI 拼接 argv
+        // 的必然产物；跳过的空格算进被吃掉的区间，不进 remainder。
+        const std::size_t clockPos = skipSpaces(raw_text, pos);
+        const auto clock = matchClockRange(raw_text.substr(clockPos),
                                            date ? date->impliedPeriod_ : std::string_view{});
         if( clock )
         {
-            pos += clock->length_;
+            pos = clockPos + clock->length_;
         }
 
         // 两段都没命中 = 这里根本没有时间信息。一个字都不许动。
@@ -678,34 +757,58 @@ namespace parse
         }
 
         // 缺哪段补哪段：没写日期就用基准那天，没写时刻就用零点。
-        const std::chrono::sys_days day = date ? date->day_ : baseDay;
-        const std::chrono::minutes  at  = clock ? clock->start_ : std::chrono::minutes{ 0 };
+        const std::chrono::sys_days day     = date ? date->day_ : baseDay;
+        const std::chrono::sys_days lastDay = dateEnd ? *dateEnd : day;
+        const std::chrono::minutes  at      = clock ? clock->start_ : std::chrono::minutes{ 0 };
 
         // 「晚上12点」这类落在次日的时刻靠 dayOffset_ 把日期推一天。
         const int startDayOffset = clock ? clock->startDayOffset_ : 0;
 
-        const std::chrono::sys_seconds start{ day + at + std::chrono::days{ startDayOffset } };
+        // 起点：
+        //   没有日期区间 -> 这一天 + 钟点（「周三下午3点」= 周三 15:00）
+        //   有日期区间   -> 首日的零点（「周一到周五下午3点」= 周一 00:00 起）
+        //
+        // 日期 + 钟点同时出现时会有语义二重性（可能是"一条跨度"，也可能是
+        // "每天重复"）。这里统一按「一条跨度」处理：起点取首日 00:00，
+        // 终点取下一天 + 钟点终点。重复语义留给以后的数据模型，不在解析层猜。
+        const std::chrono::sys_seconds clockStart{ day + at
+                                                 + std::chrono::days{ startDayOffset } };
+        const std::chrono::sys_seconds start = dateEnd
+                                             ? std::chrono::sys_seconds{ day }
+                                             : clockStart;
+
         std::optional<std::chrono::sys_seconds> end;
 
         if( clock && clock->end_ )
         {
-            std::chrono::sys_seconds e{ day + *clock->end_
+            // 终点落在**最后一天**上：「周一到周五下午3点到5点」= 周五 17:00。
+            std::chrono::sys_seconds e{ lastDay + *clock->end_
                                       + std::chrono::days{ clock->endDayOffset_ } };
 
             // 「23点到1点」：终点早于起点就是跨了零点，往后推一天。
             // 「9点到9点」这种正好相等的原样留着，不擅自补成 24 小时。
-            if( e < start )
+            //
+            // 比较基准是**最后一天**的钟点起点，不是整个区间的起点 ——
+            // 否则「周一到周五的23点到1点」里，终点永远大于周一 0 点，
+            // 跨天判断就再也不会触发了。
+            const std::chrono::sys_seconds lastClockStart{ lastDay + at
+                                                         + std::chrono::days{ startDayOffset } };
+            if( e < lastClockStart )
             {
                 e += std::chrono::days{ 1 };
             }
             end = e;
         }
+        else if( dateEnd && clock )
+        {
+            // 日期区间 + 钟点（点）：「周一到周五下午3点」= 周一 0:00 → 周五 15:00。
+            end = std::chrono::sys_seconds{ lastDay + at
+                                          + std::chrono::days{ startDayOffset } };
+        }
         else if( dateEnd )
         {
-            // 日期区间：半开区间，终点是第二个日期的零点。
-            // 同时写了钟点区间（「周一到周五下午3点到5点」）时钟点区间优先 ——
-            // 它离得更近、写得更具体。
-            end = std::chrono::sys_seconds{ *dateEnd };
+            // 纯日期区间：「周一到周五」= 周一 0:00 → 周六 0:00（含周五整天）。
+            end = std::chrono::sys_seconds{ *dateEnd } + std::chrono::days{ 1 };
         }
 
         core::TimeRange range{ start, end };

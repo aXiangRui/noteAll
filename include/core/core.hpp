@@ -1,5 +1,6 @@
 #pragma once
 
+#include <chrono>
 #include <expected>
 #include <filesystem>
 #include <optional>
@@ -30,9 +31,18 @@ public:
     // load() 跳过的坏行说明。交给上层决定显不显示。
     const std::vector<std::string>& warnings() const;
 
-    // 追加一条：生成 id + created_at(UTC)，落盘。返回写好的 Entry，
-    // 因为 CLI 要打印 "已记录 <id>"。
-    std::expected<Entry, std::string> add(std::string_view rawText);
+    // 追加一条：生成 id，落盘。返回写好的 Entry，因为 CLI 要打印 "已记录 <id>"。
+    //
+    // created_at 由调用方传进来，**不在这里取 now()**：
+    //   1. parseTime 的 base 必须正好是 created_at（「上周三」相对的是记录时刻），
+    //      两边各取一次 now()，午夜前后就可能差一天；
+    //   2. 传进来之后 core 完全可预测，测试不用跟系统时钟赛跑。
+    //
+    // occurred 是解析器的结果（可空）。core 不认识 parse，也不该认识 ——
+    // 谁解析谁负责，core 只负责把结果存下来。
+    std::expected<Entry, std::string> add(std::string_view      rawText,
+                                          std::chrono::sys_seconds createdAt,
+                                          std::optional<TimeRange> occurred = std::nullopt);
 
     // 按 created_at 倒序（新的在前）
     const std::vector<Entry>& list() const;

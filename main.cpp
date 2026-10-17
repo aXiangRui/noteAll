@@ -7,11 +7,14 @@
 // 规格见 docs/ROADMAP.md §2.6。
 
 #include "core/core.hpp"
+#include "parse/timeParse.hpp"
 #include "view/console_view.hpp"
 
+#include <chrono>
 #include <cstdlib>
 #include <filesystem>
 #include <iostream>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -65,6 +68,52 @@ std::filesystem::path dataPath()
         return env;
     }
     return "notes.jsonl";
+}
+
+// ---------------------------------------------------------------------------
+// 本地墙上时间 <-> UTC
+//
+// parseTime 是时区无关的：它把 base 当"墙上时钟"做日历运算，结果的每个字段
+// 也还是墙上时钟。可 Entry 里存的是 UTC（ROADMAP §0.5）。所以 CLI 这一层
+// 必须做两次转换：
+//
+//     解析前：UTC(created_at)  -> 本地墙上时间          当 base
+//     解析后：本地墙上时间      -> UTC                  落盘
+//
+// 不做的话，UTC+8 机器上「今天」会变成昨天，「下午3点」显示成晚上11点。
+// ---------------------------------------------------------------------------
+
+std::chrono::sys_seconds nowUtc()
+{
+    return std::chrono::floor<std::chrono::seconds>(std::chrono::system_clock::now());
+}
+
+// UTC -> 本地墙上时间。返回值类型仍是 sys_seconds，但它的"值"是墙上时钟
+// （比如本地 15:00 就是 15:00），只用来喂 parseTime，不要当时间点存。
+std::chrono::sys_seconds utcToLocalWall(std::chrono::sys_seconds utc)
+{
+    const std::chrono::zoned_time zt{std::chrono::current_zone(), utc};
+    return std::chrono::sys_seconds{zt.get_local_time().time_since_epoch()};
+}
+
+// 本地墙上时间 -> UTC。
+//
+// 用 get_info 而不是 zoned_time 的构造函数：后者碰到夏令时"跳过"的时刻
+// （gap）会抛 nonexistent_local_time，一条笔记不该因为这种边界存不进去。
+//
+// local_info 的三种结果：
+//   unique      -> first.offset
+//   nonexistent -> 取 second.offset（跳变**之后**的偏移，标准推荐的做法）
+//   ambiguous   -> 取 first.offset（跳变**之前**的偏移，也就是较早的那个时刻）
+std::chrono::sys_seconds localWallToUtc(std::chrono::sys_seconds wall)
+{
+    const std::chrono::local_time<std::chrono::seconds> local{wall.time_since_epoch()};
+    const std::chrono::local_info info = std::chrono::current_zone()->get_info(local);
+
+    const auto offset = info.result == std::chrono::local_info::nonexistent
+                            ? info.second.offset
+                            : info.first.offset;
+    return wall - offset;
 }
 
 void printHelp(std::ostream& os)
@@ -143,7 +192,25 @@ int run(const std::vector<std::string>& args, view::View& v)
             text += args[i];
         }
 
-        auto added = note.add(text);
+        // created_at 先定下来，再解析 —— 「上周三」相对的就是它。
+        // 顺序反过来（先 add 再 parse），两次 now() 之间可能已经跨了一天。
+        const auto createdAt = nowUtc();
+
+        // parseTime 吃的是墙上时钟，所以 base 也要换成本地墙上时间。
+        const auto parsed = parse::parseTime(text, utcToLocalWall(createdAt));
+
+        // 解析结果是墙上时钟，落盘前换回 UTC。
+        std::optional<core::TimeRange> occurred;
+        if (parsed.occurred)
+        {
+            occurred = core::TimeRange{
+                localWallToUtc(parsed.occurred->start),
+                parsed.occurred->end
+                    ? std::optional<std::chrono::sys_seconds>{localWallToUtc(*parsed.occurred->end)}
+                    : std::nullopt};
+        }
+
+        auto added = note.add(text, createdAt, occurred);
         if (!added)
         {
             v.RenderError("保存失败: " + added.error());

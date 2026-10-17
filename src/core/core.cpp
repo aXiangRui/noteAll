@@ -78,7 +78,9 @@ const std::vector<std::string>& Core::warnings() const
 // 增删查
 // ---------------------------------------------------------------------------
 
-std::expected<Entry, std::string> Core::add(std::string_view rawText)
+std::expected<Entry, std::string> Core::add(std::string_view         rawText,
+                                            std::chrono::sys_seconds createdAt,
+                                            std::optional<TimeRange> occurred)
 {
     Entry e;
 
@@ -86,11 +88,13 @@ std::expected<Entry, std::string> Core::add(std::string_view rawText)
     // 这是整个项目的核心不变量 —— 别的字段以后都能重新生成，原文不能。
     e.raw_text   = std::string{rawText};
     e.id         = makeId(entries_);
-    e.created_at = std::chrono::floor<std::chrono::seconds>(
-                       std::chrono::system_clock::now());
+    e.created_at = createdAt;
 
-    // occurred / tags / kind / confirmed 保持默认（空、Unknown、false）——
-    // 时间未知就不猜，等 M1 的 parseTime 来填。
+    // 解析结果原样收下。空 = 解析器没认出来，保持"时间未知"，不猜。
+    e.occurred = std::move(occurred);
+
+    // tags / kind / confirmed 保持默认（空、Unknown、false）——
+    // 那些是 M2 的事。
 
     // 先改内存
     entries_.push_back(e);

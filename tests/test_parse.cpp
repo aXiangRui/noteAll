@@ -298,9 +298,8 @@ TEST_CASE("形状 3：remainder")
 
 TEST_CASE("形状 3：单位词限定在 周 / 星期 / 礼拜")
 {
-    // 「月」「年」「天」「日」在 unitWords 里有，但 weekUnits 里没有。
+    // 「月」「年」「天」「日」不是「周X」的单位词。
     // 「下月一号」是「下个月一号」（形状 4 的活儿），绝不能被这里截成「下周的周一」。
-    // 之前 unitWords 循环七个词的时候，这条就是错的。
     const std::string texts[] =
     {
         "下月一号交房租",
@@ -645,6 +644,34 @@ TEST_CASE("形状 5/6：12 点和 0 点的边界")
 }
 
 // ---------------------------------------------------------------------------
+// 时段词的有效钟点：不能对所有时段词都用"小于 12 就 +12"
+// ---------------------------------------------------------------------------
+
+TEST_CASE("形状 5/6：中午和晚上的有效钟点")
+{
+    // 中午：11 点、12 点照字面；1 点、2 点是下午
+    CHECK(startedAt("中午11点")   == date(2026, 10, 8) + 11h);
+    CHECK(startedAt("中午11点半") == date(2026, 10, 8) + 11h + 30min);
+    CHECK(startedAt("中午12点")   == date(2026, 10, 8) + 12h);
+    CHECK(startedAt("中午1点")    == date(2026, 10, 8) + 13h);
+    CHECK(startedAt("中午2点")    == date(2026, 10, 8) + 14h);
+
+    // 中午9点 / 中午10点不是"中午"的说法 —— 不许猜成晚上 9 点 / 10 点
+    CHECK_FALSE(parse::parseTime("中午9点", BASE).occurred.has_value());
+    CHECK_FALSE(parse::parseTime("中午10点半", BASE).occurred.has_value());
+
+    // 晚上 6..11 点是当天 18..23；1..5 点是次日凌晨
+    CHECK(startedAt("晚上6点")   == date(2026, 10, 8) + 18h);
+    CHECK(startedAt("晚上11点")  == date(2026, 10, 8) + 23h);
+    CHECK(startedAt("晚上1点")   == date(2026, 10, 9) + 1h);
+    CHECK(startedAt("晚上2点半") == date(2026, 10, 9) + 2h + 30min);
+    CHECK(startedAt("晚上5点")   == date(2026, 10, 9) + 5h);
+
+    // 「昨晚」自带「晚上」：昨晚1点 = 昨天（10-07）的次日凌晨 01:00
+    CHECK(startedAt("昨晚1点") == date(2026, 10, 8) + 1h);
+}
+
+// ---------------------------------------------------------------------------
 // 区间：第二个钟点自带时段词 / 跨零点
 // ---------------------------------------------------------------------------
 
@@ -709,13 +736,20 @@ TEST_CASE("时段：终点早于起点就算跨了零点")
     CHECK(r.occurred->start == date(2026, 10, 8) + 23h);
     CHECK(*r.occurred->end   == date(2026, 10, 9) + 1h);
 
-    // 「9点到8点」多半是笔误，但规则统一：往后推一天。
-    // 不判非法，也绝不静默给出 end < start 的区间。
+    // 两边都没写时段词时，先在当天补 12 小时：「9点到8点」是 9:00–20:00，
+    // 不是次日 08:00（23 小时）。补完还早于起点（「23点到1点」）才跨零点。
     const auto r2 = parse::parseTime("9点到8点", BASE);
     REQUIRE(r2.occurred.has_value());
     REQUIRE(r2.occurred->end.has_value());
     CHECK(r2.occurred->start == date(2026, 10, 8) + 9h);
-    CHECK(*r2.occurred->end   == date(2026, 10, 9) + 8h);
+    CHECK(*r2.occurred->end   == date(2026, 10, 8) + 20h);
+
+    // 「11点到1点」同理：13:00 结束，跨度 2 小时，不是次日 01:00
+    const auto r3 = parse::parseTime("11点到1点", BASE);
+    REQUIRE(r3.occurred.has_value());
+    REQUIRE(r3.occurred->end.has_value());
+    CHECK(r3.occurred->start == date(2026, 10, 8) + 11h);
+    CHECK(*r3.occurred->end   == date(2026, 10, 8) + 13h);
 }
 
 // ---------------------------------------------------------------------------
@@ -814,7 +848,8 @@ TEST_CASE("形状 6：「今年10月」缺了日 / 号，整段不认")
 // ---------------------------------------------------------------------------
 // 日期区间：日期 到 日期
 //
-// 约定：半开区间，end 是第二个日期的零点（跟「9点到11点」同一套语义）。
+// 约定：一条连续跨度，终点含第二个日期整天 ——
+// 「3月5日到3月7日」= 3/5 00:00 到 3/8 00:00，不是到 3/7 00:00。
 // ---------------------------------------------------------------------------
 
 TEST_CASE("日期区间：日期 到 日期")
@@ -823,7 +858,7 @@ TEST_CASE("日期区间：日期 到 日期")
     REQUIRE(r.occurred.has_value());
     REQUIRE(r.occurred->end.has_value());
     CHECK(r.occurred->start == date(2027, 3, 5));
-    CHECK(*r.occurred->end   == date(2027, 3, 7));
+    CHECK(*r.occurred->end   == date(2027, 3, 8));   // 含 3/7 整天
     CHECK(r.remainder.empty());
 
     CHECK(parse::parseTime("3月5日到3月7日交报告", BASE).remainder == "交报告");
@@ -834,7 +869,7 @@ TEST_CASE("日期区间：日期 到 日期")
     REQUIRE(y.occurred.has_value());
     REQUIRE(y.occurred->end.has_value());
     CHECK(y.occurred->start == date(2026, 12, 31));
-    CHECK(*y.occurred->end   == date(2027, 1, 2));
+    CHECK(*y.occurred->end   == date(2027, 1, 3));   // 含 1/2 整天
 }
 
 TEST_CASE("日期区间：第二个日期不许落在第一个之前")
@@ -845,13 +880,83 @@ TEST_CASE("日期区间：第二个日期不许落在第一个之前")
     REQUIRE(r.occurred.has_value());
     REQUIRE(r.occurred->end.has_value());
     CHECK(r.occurred->start == date(2026, 10, 12));
-    CHECK(*r.occurred->end   == date(2026, 10, 16));
+    CHECK(*r.occurred->end   == date(2026, 10, 17));   // 周六 0:00 = 含周五整天
 
     const auto s = parse::parseTime("这周六到周日", BASE);
     REQUIRE(s.occurred.has_value());
     REQUIRE(s.occurred->end.has_value());
     CHECK(s.occurred->start == date(2026, 10, 10));
-    CHECK(*s.occurred->end   == date(2026, 10, 11));
+    CHECK(*s.occurred->end   == date(2026, 10, 12));   // 周一 0:00 = 含周日整天
+}
+
+// ---------------------------------------------------------------------------
+// 日期区间 + 钟点：统一成一条跨度
+//
+// 语义二重性（一条跨度 vs 每天重复）无法在 TimeRange 里表达，
+// 这里定死为一条跨度：
+//     起点 = 首日 00:00（钟点起点不参与）
+//     终点 = 末日 + 钟点终点（没写钟点终点就用钟点起点）
+// ---------------------------------------------------------------------------
+
+TEST_CASE("日期区间 + 钟点：统一成一条跨度")
+{
+    // 「周一到周五下午3点」→ 周一 0:00 到周五 15:00
+    const auto point = parse::parseTime("周一到周五下午3点", BASE);
+    REQUIRE(point.occurred.has_value());
+    REQUIRE(point.occurred->end.has_value());
+    CHECK(point.occurred->start == date(2026, 10, 12));
+    CHECK(*point.occurred->end   == date(2026, 10, 16) + 15h);
+
+    // 「周一到周五下午3点到5点」→ 周一 0:00 到周五 17:00
+    const auto span = parse::parseTime("周一到周五下午3点到5点", BASE);
+    REQUIRE(span.occurred.has_value());
+    REQUIRE(span.occurred->end.has_value());
+    CHECK(span.occurred->start == date(2026, 10, 12));
+    CHECK(*span.occurred->end   == date(2026, 10, 16) + 17h);
+
+    // 「3月5日到3月7日下午3点」→ 3/5 0:00 到 3/7 15:00
+    const auto abs = parse::parseTime("3月5日到3月7日下午3点", BASE);
+    REQUIRE(abs.occurred.has_value());
+    REQUIRE(abs.occurred->end.has_value());
+    CHECK(abs.occurred->start == date(2027, 3, 5));
+    CHECK(*abs.occurred->end   == date(2027, 3, 7) + 15h);
+
+    // 钟点区间跨零点时，终点从**末日**往后推，不是从首日
+    // 「周一到周五晚上11点到凌晨1点」→ 周一 0:00 到周六 1:00
+    const auto cross = parse::parseTime("周一到周五晚上11点到凌晨1点", BASE);
+    REQUIRE(cross.occurred.has_value());
+    REQUIRE(cross.occurred->end.has_value());
+    CHECK(cross.occurred->start == date(2026, 10, 12));
+    CHECK(*cross.occurred->end   == date(2026, 10, 17) + 1h);
+}
+
+// ---------------------------------------------------------------------------
+// 空格：CLI 把 argv 用空格拼成一条文本，主体和后缀之间可能隔着空格
+// ---------------------------------------------------------------------------
+
+TEST_CASE("空格：日期和时刻之间允许有空格")
+{
+    const auto r = parse::parseTime("明天 下午3点", BASE);
+    REQUIRE(r.occurred.has_value());
+    CHECK(r.occurred->start == date(2026, 10, 9) + 15h);
+    CHECK(r.remainder.empty());
+
+    // 空格算进被吃掉的区间，正文照旧
+    const auto tail = parse::parseTime("明天 下午3点 开会", BASE);
+    REQUIRE(tail.occurred.has_value());
+    CHECK(tail.remainder == " 开会");
+
+    // 「到」两边有空格也认
+    const auto range = parse::parseTime("周一 到 周五", BASE);
+    REQUIRE(range.occurred.has_value());
+    REQUIRE(range.occurred->end.has_value());
+    CHECK(range.occurred->start == date(2026, 10, 12));
+    CHECK(*range.occurred->end   == date(2026, 10, 17));
+
+    // 只有"日期 + 空格 + 正文"时，正文不能被当成时刻吃掉
+    const auto note = parse::parseTime("今天 天气 不错", BASE);
+    REQUIRE(note.occurred.has_value());
+    CHECK(note.remainder == " 天气 不错");
 }
 
 TEST_CASE("日期区间：第二个日期早于第一个时，整段区间不吃")
@@ -863,4 +968,41 @@ TEST_CASE("日期区间：第二个日期早于第一个时，整段区间不吃
     CHECK_FALSE(r.occurred->end.has_value());
     CHECK(r.occurred->start == date(2026, 10, 9));
     CHECK(r.remainder == "到昨天");
+}
+
+TEST_CASE("日期区间：猜出来的年份被推到下一年、跨度又过大时，整段不吃")
+{
+    // 「3月5日到3月1日」的第二个日期被 pickYear 推到 2028-03-01（跨了约一年），
+    // 那是口误，不是跨年区间。宁可退回单个日期。
+    const auto r = parse::parseTime("3月5日到3月1日", BASE);
+    REQUIRE(r.occurred.has_value());
+    CHECK_FALSE(r.occurred->end.has_value());
+    CHECK(r.occurred->start == date(2027, 3, 5));
+    CHECK(r.remainder == "到3月1日");
+
+    const auto r2 = parse::parseTime("10月5日到9月1日", BASE);
+    REQUIRE(r2.occurred.has_value());
+    CHECK_FALSE(r2.occurred->end.has_value());
+    CHECK(r2.remainder == "到9月1日");
+
+    // 真正的跨年（12月31日到1月1日）照常放行
+    const auto ok = parse::parseTime("12月31日到1月1日", BASE);
+    REQUIRE(ok.occurred.has_value());
+    REQUIRE(ok.occurred->end.has_value());
+    CHECK(ok.occurred->start == date(2026, 12, 31));
+    CHECK(*ok.occurred->end   == date(2027, 1, 2));   // 含 1/1 整天
+
+    // 同年内的大跨度也放行：1月1日到12月31日
+    const auto year = parse::parseTime("1月1日到12月31日", BASE);
+    REQUIRE(year.occurred.has_value());
+    REQUIRE(year.occurred->end.has_value());
+    CHECK(year.occurred->start == date(2027, 1, 1));
+    CHECK(*year.occurred->end   == date(2028, 1, 1));   // 含 12/31 整天
+
+    // 写了年份的长区间不受影响
+    const auto explicitYear = parse::parseTime("2026年3月1日到2027年2月1日", BASE);
+    REQUIRE(explicitYear.occurred.has_value());
+    REQUIRE(explicitYear.occurred->end.has_value());
+    CHECK(explicitYear.occurred->start == date(2026, 3, 1));
+    CHECK(*explicitYear.occurred->end   == date(2027, 2, 2));   // 含 2/1 整天
 }
