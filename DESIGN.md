@@ -427,12 +427,19 @@ cd build && ctest -C Debug       # 跑测试
 ### 下一步
 
 **→ 完整清单（10 条，按建议顺序）见 [docs/ROADMAP.md §2.11](docs/ROADMAP.md)。**
-最该先做的三件：
 
-1. **建 git 基线**（仓库至今零提交，任何改动都没有退路）；
-2. **补 `test_store.cpp`**：照 [ROADMAP §2.3](docs/ROADMAP.md) 那 8 条规格写，先红后绿；
-3. **修两个静默坏数据的地方**：`from_json` 忽略 `fromIso` 返回值（坏时间变 1970）、
-   `load()` 没检查 `exists` 的 `error_code`（IO 错误被当成"文件不存在"）。
+✅ **已完成之一：git 基线** —— 3 次提交，远端 <https://github.com/aXiangRui/noteAll> 已同步。
+
+接下来最该做的三件：
+
+1. **补 `test_store.cpp`**：照 [ROADMAP §2.3](docs/ROADMAP.md) 那 8 条规格写，先红后绿 ——
+   存储层是唯一"错了会静默丢数据"的地方，现在 0 用例；
+2. **修两个静默坏数据的地方**：`from_json` 忽略 `fromIso` 返回值（坏时间变 1970）、
+   `load()` 没检查 `exists` 的 `error_code`（IO 错误被当成"文件不存在"）；
+3. **把 `parseTime` 接进 `note add`**（含空格坑）—— 否则 M1 的招牌能力用户摸不到。
+
+**打分标准见 [docs/review-rubric.md](docs/review-rubric.md)**（2026-10-15 首评 **7.70 / 10**；
+每个里程碑结束时按那套协议重打一次）。
 
 其余文档：
 
@@ -443,6 +450,7 @@ cd build && ctest -C Debug       # 跑测试
 | [docs/timeParse-源码.md](docs/timeParse-源码.md) | `timeParse.hpp` / `.cpp` 的源码快照（已按当天加固后的代码重导） |
 | [docs/nlohmann-json.md](docs/nlohmann-json.md) | json 的 API 速查（写 `store.cpp` 时对照） |
 | [docs/entry-point.md](docs/entry-point.md) | 教学：`main` / `wmain` / CRT —— 程序到底从哪开始跑 |
+| [docs/review-rubric.md](docs/review-rubric.md) | **项目自评标准**：7 维加权 + 评分锚点 + 复核协议（2026-10-15 首评 7.70） |
 | [third_party/README.md](third_party/README.md) | 依赖来源、SHA256 与国内下载方式 |
 
 > 📄 `docs/` 下的 `.pdf` / `.html` 都是**个人阅读用的导出副本**（由对应的 `.md` 转换而来），
