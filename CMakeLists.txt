@@ -83,6 +83,69 @@ add_library(parse
 target_link_libraries(parse PUBLIC core)
 
 # ---------------------------------------------------------------------------
+# flow —— 草稿调度（取任务 / 重试 / 放弃 / 预算 / 陈旧丢弃）
+# 依赖 core；不认识 llm 与 UI：生成器和存储都是构造时注入的
+# ---------------------------------------------------------------------------
+add_library(flow
+    src/flow/draft_queue.cpp)
+target_include_directories(flow PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
+target_link_libraries(flow PUBLIC core)
+
+# ---------------------------------------------------------------------------
+# workflow —— 编排引擎（mini-Dify 的数据模型 + 图算法 + 执行器）
+# 依赖：只有 third_party（nlohmann/json 在公共头里暴露 Value）
+# 不认识 core / llm / UI；节点处理器由上层注册（见 workflow/node_registry.hpp）
+# ---------------------------------------------------------------------------
+add_library(workflow
+    src/workflow/graph.cpp
+    src/workflow/node.cpp
+    src/workflow/node_registry.cpp
+    src/workflow/run_context.cpp
+    src/workflow/engine.cpp)
+
+target_include_directories(workflow PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
+# run_context.hpp 直接暴露 nlohmann::json（Value 别名），所以是 PUBLIC。
+target_link_libraries(workflow PUBLIC third_party)
+
+# ---------------------------------------------------------------------------
+# connect —— 网络传输（WinHTTP）
+# 只管 HTTP 收发，不认识 DeepSeek、JSON 语义、提示词
+#
+# 平台约束：WinHTTP 是 Windows 系统组件，所以整块都在 if(WIN32) 里 ——
+# 光把链接包进去是不够的，Linux 上连 winhttp.h 都没有，源文件根本编不过。
+# ---------------------------------------------------------------------------
+if(WIN32)
+    add_library(connect
+        src/LLM-connect/connect.cpp)
+
+    target_include_directories(connect PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
+
+    # 显式钉住 API 版本：WINHTTP_OPTION_DECOMPRESSION、WINHTTP_ACCESS_TYPE_AUTOMATIC_PROXY
+    # 这类较新的选项要靠 _WIN32_WINNT 才可见，不定义时可能莫名其妙编不过。
+    target_compile_definitions(connect PRIVATE _WIN32_WINNT=0x0A00)
+
+    # PRIVATE 而不是 PUBLIC：链接 winhttp 是实现细节，不该传染给链接 connect 的上层。
+    # 不链 third_party：这一层不认识 JSON，也不该认识（见上面的文件头注释）。
+    # WinHTTP 是系统组件，不用第三方库；#pragma comment 也可以，
+    # 但写在这里更显眼，换编译器时不会悄悄失效。
+    target_link_libraries(connect PRIVATE winhttp)
+
+    # -----------------------------------------------------------------------
+    # llm —— 聊天协议层（OpenAI 兼容：DeepSeek / ollama / llama.cpp server 同一套）
+    # 依赖方向：llm -> net(connect) + third_party；**不认识 core**
+    # 草稿队列与确认流程在 workflow 层，不在这一层
+    # -----------------------------------------------------------------------
+    add_library(llm
+        src/llm/http_chat_client.cpp)
+
+    target_include_directories(llm PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
+    # third_party 只有 .cpp 里用到（nlohmann），所以 PRIVATE。
+    target_link_libraries(llm PUBLIC connect PRIVATE third_party)
+else()
+    message(STATUS "connect：WinHTTP 只在 Windows 上可用，本平台跳过这个静态库")
+endif()
+
+# ---------------------------------------------------------------------------
 # 可执行文件
 # ---------------------------------------------------------------------------
 add_executable(note main.cpp)

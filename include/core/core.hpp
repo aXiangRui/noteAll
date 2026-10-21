@@ -59,5 +59,4 @@ private:
 
 // 12 位十六进制 = 48 bit 随机。不用递增计数器的理由见 ROADMAP.md §2.5。
 std::string makeId(const std::vector<Entry>& existing);
-
 }  // namespace core

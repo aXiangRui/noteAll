@@ -34,4 +34,12 @@ docs/*.html
 
 # ---- 一次性日志 ----
 vc.log
+cfg.log
+test.log
 
+# ---- DSH 会话/工作区状态（个人环境，不进库） ----
+.dsh/
+
+# ---- clangd 配置（内含本机绝对路径，换机器就失效） ----
+# 想跨机器共享：提交 .clangd.example，本地复制成 .clangd 后改那两行 -I 路径。
+.clangd
