@@ -1055,3 +1055,23 @@ TEST_CASE("中文数字的边界：24 点不支持，日期里的中文数字也
     // 认不出就整句不吃，原文留在 remainder 里（不猜）
     CHECK(parse::parseTime("二十四点", BASE).remainder == "二十四点");
 }
+
+TEST_CASE("分钟可以不写「分」：五点四十 / 5点40 / 十点零五分 / 一刻")
+{
+    CHECK(startedAt("五点四十")   == date(2026, 10, 8) + 5h + 40min);
+    CHECK(startedAt("五点四十分") == startedAt("五点四十"));     // 写不写「分」等价
+    CHECK(startedAt("5点40")      == startedAt("五点四十"));     // 阿拉伯数字也一样
+    CHECK(startedAt("下午五点四十") == date(2026, 10, 8) + 17h + 40min);
+    CHECK(startedAt("23点50")     == date(2026, 10, 8) + 23h + 50min);
+
+    // 「零五分」这种口语写法
+    CHECK(startedAt("十点零五分") == date(2026, 10, 8) + 10h + 5min);
+
+    // 一刻 / 三刻（别让裸数字把「一」当成 1 分钟）
+    CHECK(startedAt("十点一刻")   == date(2026, 10, 8) + 10h + 15min);
+    CHECK(startedAt("十点三刻")   == date(2026, 10, 8) + 10h + 45min);
+    CHECK(startedAt("下午四点一刻") == date(2026, 10, 8) + 16h + 15min);
+
+    // 只有钟点 = 整点
+    CHECK(startedAt("五点") == date(2026, 10, 8) + 5h);
+}

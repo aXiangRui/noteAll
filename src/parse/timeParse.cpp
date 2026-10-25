@@ -111,6 +111,16 @@ namespace parse
             std::size_t used  = first->second;
             int         value = first->first;
 
+            // 零五 / 〇五：钟点里的「零五分」读作 5（口语里 10:05 就这么说）
+            if( value == 0 )
+            {
+                if( const auto next = takeUnit(s.substr(used)) )
+                {
+                    return std::make_pair(next->first, used + next->second);
+                }
+                return std::make_pair(0, used);
+            }
+
             // 形如 二十 / 二十三
             if( s.substr(used).starts_with("十") )
             {
@@ -274,14 +284,29 @@ namespace parse
                 extra = std::chrono::minutes{ 30 };
                 pos  += 3;
             }
-            else if( const auto m = readClockNumber(s.substr(pos)); m && at(s, pos + m->second, "分") )
+            else if( at(s, pos, "一刻") )
             {
-                if( m->first > 59 )
-                {
-                    return std::nullopt;
-                }
+                extra = std::chrono::minutes{ 15 };
+                pos  += 6;   // 「一刻」6 字节
+            }
+            else if( at(s, pos, "三刻") )
+            {
+                extra = std::chrono::minutes{ 45 };
+                pos  += 6;
+            }
+            else if( const auto m = readClockNumber(s.substr(pos)); m && m->first <= 59 )
+            {
+                // 「分」可有可无：五点四十分 / 五点四十 / 5点40 / 23点50 都认。
+                //
+                // 以前只认带「分」的，于是「五点四十」被拆成「五点」+ 剩下「四十」，
+                // 时间悄悄变成 05:00 —— **静默给出错误时间**比不解析更糟。
                 extra = std::chrono::minutes{ m->first };
-                pos  += m->second + 3;
+                pos  += m->second;
+
+                if( at(s, pos, "分") )
+                {
+                    pos += 3;
+                }
             }
 
             const auto fix = applyPeriod(h->first, period);
