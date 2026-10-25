@@ -25,6 +25,12 @@
 #include <string>
 #include <vector>
 
+#ifdef _WIN32
+# define WIN32_LEAN_AND_MEAN
+# define NOMINMAX
+# include <windows.h>   // SetConsoleOutputCP：不设它中文输出会是乱码
+#endif
+
 namespace
 {
 
@@ -71,10 +77,33 @@ std::string envOr(char const* name, std::string fallback)
     return fallback;
 }
 
+/** 去掉首尾空白与成对的引号 —— 从文件里 Get-Content 出来的 key 常常带着这些。 */
+std::string cleanKey(std::string key)
+{
+    const auto isSpace = [](char c) { return c == ' ' || c == '\t' || c == '\r' || c == '\n' || c == '\0'; };
+
+    std::size_t begin = 0;
+    while (begin < key.size() && isSpace(key[begin])) { ++begin; }
+    std::size_t end = key.size();
+    while (end > begin && isSpace(key[end - 1])) { --end; }
+    key = key.substr(begin, end - begin);
+
+    if (key.size() >= 2 && (key.front() == '"' || key.front() == '\'') && key.back() == key.front())
+    {
+        key = key.substr(1, key.size() - 2);
+    }
+    return key;
+}
+
 }  // namespace
 
 int main(int argc, char** argv)
 {
+#ifdef _WIN32
+    // 控制台默认不是 UTF-8，不设这行中文输出会变成「璇锋眰」这种乱码。
+    ::SetConsoleOutputCP(CP_UTF8);
+#endif
+
     Args args;
     args.base   = valueOf(argc, argv, "--base", args.base);
     args.path   = valueOf(argc, argv, "--path", args.path);
@@ -82,11 +111,13 @@ int main(int argc, char** argv)
     args.prompt = valueOf(argc, argv, "--prompt", args.prompt);
     args.noAuth = hasFlag(argc, argv, "--no-auth");
 
+    std::string apiKey = args.noAuth ? std::string{} : cleanKey(envOr("NOTE_LLM_KEY", ""));
+
     llm::ChatConfig config;
     config.baseUrl = args.base;
     config.path    = args.path;
     config.model   = args.model;
-    config.apiKey  = args.noAuth ? std::string{} : envOr("NOTE_LLM_KEY", "");
+    config.apiKey  = apiKey;
 
     // 本地服务（ollama / llama.cpp）通常是 http，而且不该被系统代理劫持。
     if (args.base.rfind("http://", 0) == 0 || hasFlag(argc, argv, "--direct"))
@@ -104,8 +135,17 @@ int main(int argc, char** argv)
     }
 
     std::cout << "请求: base=" << args.base << " path=" << args.path << " model=" << args.model
-              << " auth=" << (args.noAuth ? "no" : (envOr("NOTE_LLM_KEY", "").empty() ? "缺 key" : "bearer"))
+              << " auth=" << (args.noAuth ? "no"
+                                          : (apiKey.empty() ? "缺 key" : "bearer(" + std::to_string(apiKey.size()) + " 字符)"))
               << "\n";
+
+    if (!args.noAuth && apiKey.empty())
+    {
+        std::cerr << "[warn] 没读到环境变量 NOTE_LLM_KEY —— 这次请求不会带 Authorization，401 是预期的。\n"
+                     "       请在**同一个** PowerShell 窗口里先执行：\n"
+                     "         $env:NOTE_LLM_KEY = (Get-Content .secrets\\deepseek.key -Raw).Trim()\n"
+                     "       确认读到了：  if (-not $env:NOTE_LLM_KEY) { \"没读到\" } else { \"读到 \" + $env:NOTE_LLM_KEY.Length + \" 字符\" }\n";
+    }
     std::cout.flush();
 
     llm::ChatRequest request;
