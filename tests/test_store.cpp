@@ -143,8 +143,15 @@ TEST_CASE("store：raw_text 含引号、反斜杠、换行、制表、中文，�
     checkSameEntry(e, r->entries[0]);
 
     // 换行必须被转义成 \n 留在**同一行**里，否则 JSONL 的"一行一条"就破了。
+    // 现在文件第一行是格式版本头，所以恰好两行（头 + 这一条）。
     const std::string text = testutil::readFile(f.path());
-    CHECK(text.find('\n') == text.size() - 1);   // 只有一个换行：行尾那个
+    std::size_t       newlines = 0;
+    for (const char c : text)
+    {
+        if (c == '\n') { ++newlines; }
+    }
+    CHECK(newlines == 2);
+    CHECK(text.back() == '\n');
 }
 
 // ---------------------------------------------------------------------------

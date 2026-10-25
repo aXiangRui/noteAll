@@ -1,5 +1,6 @@
 #include "core/core.hpp"
 
+#include "core/file_lock.hpp"
 #include "core/store.hpp"
 
 #include <algorithm>
@@ -17,6 +18,12 @@
 // 依赖被限制在实现文件里，不会顺着头文件泄漏给所有人。
 //
 // 下面函数的顺序和 core.hpp 里声明的顺序一致，方便并排对账。
+//
+// ⚠️ 并发模型（2026-10 加）：所有**写**操作都是
+//     拿独占锁 -> 重新读盘 -> 改内存 -> 原子写 -> 放锁
+//   只加锁不重读是不够的：两个进程各自 load 后各自写，后者会拿启动时的
+//   旧快照覆盖前者的新增（丢更新）。重读才是真正解决它的那一步。
+//   读操作不用锁：写盘是 rename 原子替换，读到的要么是旧完整版、要么是新完整版。
 
 namespace core
 {
@@ -65,6 +72,7 @@ std::expected<void, std::string> Core::load()
     warnings_ = std::move(loaded->warnings);
 
     sortNewestFirst(entries_);
+    reindexVisible();
 
     return {};
 }
@@ -72,6 +80,37 @@ std::expected<void, std::string> Core::load()
 const std::vector<std::string>& Core::warnings() const
 {
     return warnings_;
+}
+
+void Core::reindexVisible()
+{
+    visible_.clear();
+    visible_.reserve(entries_.size());
+
+    for (const Entry& e : entries_)
+    {
+        if (!e.deleted_at)
+        {
+            visible_.push_back(e);
+        }
+    }
+}
+
+std::expected<void, std::string> Core::reloadForMutation()
+{
+    // 调用方必须已经持有锁，否则重读只是换了个旧快照的来源。
+    auto loaded = core::load(path_);
+    if (!loaded)
+    {
+        return std::unexpected(loaded.error());
+    }
+
+    entries_  = std::move(loaded->entries);
+    warnings_ = std::move(loaded->warnings);
+
+    sortNewestFirst(entries_);
+    reindexVisible();
+    return {};
 }
 
 // ---------------------------------------------------------------------------
@@ -82,6 +121,18 @@ std::expected<Entry, std::string> Core::add(std::string_view         rawText,
                                             std::chrono::sys_seconds createdAt,
                                             std::optional<TimeRange> occurred)
 {
+    // 1) 锁 + 重读：拿磁盘上的最新状态，别用启动时的旧快照。
+    auto lock = FileLock::acquire(path_);
+    if (!lock)
+    {
+        return std::unexpected(lock.error());
+    }
+    if (const auto refreshed = reloadForMutation(); !refreshed)
+    {
+        return std::unexpected(refreshed.error());
+    }
+
+    // 2) 改内存
     Entry e;
 
     // raw_text **原样存**：不 trim、不去空格、不改一个字。
@@ -94,13 +145,13 @@ std::expected<Entry, std::string> Core::add(std::string_view         rawText,
     e.occurred = std::move(occurred);
 
     // tags / kind / confirmed 保持默认（空、Unknown、false）——
-    // 那些是 M2 的事。
+    // 那些是 M2 的事。source 默认 Manual，导入路径由调用方改。
 
-    // 先改内存
     entries_.push_back(e);
     sortNewestFirst(entries_);
+    reindexVisible();
 
-    // 再落盘；失败就回滚
+    // 3) 落盘；失败就回滚
     if (const auto saved = save(path_, entries_); !saved)
     {
         // 回滚：把刚加的那条删掉。
@@ -111,6 +162,7 @@ std::expected<Entry, std::string> Core::add(std::string_view         rawText,
         {
             entries_.erase(it);
         }
+        reindexVisible();
         return std::unexpected(saved.error());
     }
 
@@ -119,16 +171,21 @@ std::expected<Entry, std::string> Core::add(std::string_view         rawText,
 
 const std::vector<Entry>& Core::list() const
 {
-    // 直接返回：entries_ 一直维持着"倒序"这个不变量（见文件开头的注释）。
+    // 直接返回：visible_ 一直维持着"倒序 + 不含墓碑"这个不变量。
+    return visible_;
+}
+
+const std::vector<Entry>& Core::listAll() const
+{
     return entries_;
 }
 
 std::optional<Entry> Core::find(std::string_view id) const
 {
-    const auto it = std::find_if(entries_.begin(), entries_.end(),
+    const auto it = std::find_if(visible_.begin(), visible_.end(),
                                  [&](const Entry& e) { return e.id == id; });
 
-    if (it == entries_.end())
+    if (it == visible_.end())
     {
         // 找不到是预期内的结果，不是错误 —— 空 optional 比抛异常合适。
         return std::nullopt;
@@ -136,31 +193,153 @@ std::optional<Entry> Core::find(std::string_view id) const
     return *it;
 }
 
-std::expected<void, std::string> Core::remove(std::string_view id)
+std::optional<Entry> Core::findAny(std::string_view id) const
 {
-    // 1. 先只找，不删。边遍历边删会让迭代器失效。
     const auto it = std::find_if(entries_.begin(), entries_.end(),
                                  [&](const Entry& e) { return e.id == id; });
 
-    // 2. 没找到 —— expected 的失败，把原因带上
+    if (it == entries_.end())
+    {
+        return std::nullopt;
+    }
+    return *it;
+}
+
+std::expected<void, std::string> Core::remove(std::string_view id,
+                                              std::optional<std::chrono::sys_seconds> deletedAt)
+{
+    auto lock = FileLock::acquire(path_);
+    if (!lock)
+    {
+        return std::unexpected(lock.error());
+    }
+    if (const auto refreshed = reloadForMutation(); !refreshed)
+    {
+        return std::unexpected(refreshed.error());
+    }
+
+    // 只在"活着"的记录里找：已经删过再删一次是错误，不是静默成功。
+    const auto it = std::find_if(entries_.begin(), entries_.end(),
+                                 [&](const Entry& e) { return e.id == id && !e.deleted_at; });
     if (it == entries_.end())
     {
         return std::unexpected("没有这条记录: " + std::string{id});
     }
 
-    // 3. 删之前先记住内容**和位置**：
-    //    内容 —— 落盘失败要原样塞回去
-    //    位置 —— 塞回去还得在原来的位置，不能跑到末尾
-    const std::size_t pos     = static_cast<std::size_t>(it - entries_.begin());
-    const Entry       removed = *it;
+    const auto before = entries_;   // 落盘失败要整体退回
 
-    // 4. 改内存
-    entries_.erase(it);
+    // 墓碑：记录仍在文件里，只是标了删除时刻。
+    it->deleted_at = deletedAt.value_or(
+        std::chrono::floor<std::chrono::seconds>(std::chrono::system_clock::now()));
+    reindexVisible();
 
-    // 5. 落盘；失败就把内存改回去，保证内存和文件一致
     if (const auto saved = save(path_, entries_); !saved)
     {
-        entries_.insert(entries_.begin() + static_cast<std::ptrdiff_t>(pos), removed);
+        entries_ = before;
+        reindexVisible();
+        return std::unexpected(saved.error());
+    }
+
+    return {};
+}
+
+std::expected<void, std::string> Core::restore(std::string_view id)
+{
+    auto lock = FileLock::acquire(path_);
+    if (!lock)
+    {
+        return std::unexpected(lock.error());
+    }
+    if (const auto refreshed = reloadForMutation(); !refreshed)
+    {
+        return std::unexpected(refreshed.error());
+    }
+
+    const auto it = std::find_if(entries_.begin(), entries_.end(),
+                                 [&](const Entry& e) { return e.id == id && e.deleted_at; });
+    if (it == entries_.end())
+    {
+        return std::unexpected("没有可恢复的记录: " + std::string{id});
+    }
+
+    const auto before = entries_;
+
+    it->deleted_at.reset();
+    reindexVisible();
+
+    if (const auto saved = save(path_, entries_); !saved)
+    {
+        entries_ = before;
+        reindexVisible();
+        return std::unexpected(saved.error());
+    }
+
+    return {};
+}
+
+std::expected<void, std::string> Core::purge(std::string_view id)
+{
+    auto lock = FileLock::acquire(path_);
+    if (!lock)
+    {
+        return std::unexpected(lock.error());
+    }
+    if (const auto refreshed = reloadForMutation(); !refreshed)
+    {
+        return std::unexpected(refreshed.error());
+    }
+
+    const auto it = std::find_if(entries_.begin(), entries_.end(),
+                                 [&](const Entry& e) { return e.id == id; });
+    if (it == entries_.end())
+    {
+        return std::unexpected("没有这条记录: " + std::string{id});
+    }
+
+    const auto before = entries_;
+
+    entries_.erase(it);
+    reindexVisible();
+
+    if (const auto saved = save(path_, entries_); !saved)
+    {
+        entries_ = before;
+        reindexVisible();
+        return std::unexpected(saved.error());
+    }
+
+    return {};
+}
+
+std::expected<void, std::string> Core::update(const Entry& entry)
+{
+    auto lock = FileLock::acquire(path_);
+    if (!lock)
+    {
+        return std::unexpected(lock.error());
+    }
+    if (const auto refreshed = reloadForMutation(); !refreshed)
+    {
+        return std::unexpected(refreshed.error());
+    }
+
+    const auto it = std::find_if(entries_.begin(), entries_.end(),
+                                 [&](const Entry& e) { return e.id == entry.id && !e.deleted_at; });
+    if (it == entries_.end())
+    {
+        return std::unexpected("没有这条记录（或已删除）: " + entry.id);
+    }
+
+    const auto before = entries_;
+
+    *it = entry;
+    sortNewestFirst(entries_);   // 允许改 created_at，所以重排一次
+    reindexVisible();
+
+    if (const auto saved = save(path_, entries_); !saved)
+    {
+        entries_ = before;
+        reindexVisible();
         return std::unexpected(saved.error());
     }
 
@@ -192,4 +371,4 @@ std::string makeId(const std::vector<Entry>& existing)
     }
 }
 
-}   // namespace core
+}  // namespace core

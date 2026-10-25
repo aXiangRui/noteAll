@@ -20,6 +20,20 @@ namespace core
         Thought
     };
 
+    /**
+     * 这条记录从哪来。
+     *
+     * 为什么现在就要：以后会批量导入微信/别的笔记应用，没有来源字段，
+     * 脏数据永远无法回溯（"哪些是导入的、能不能整批重来"）。
+     * 存字符串不存数字（同 Kind 的理由，见 docs/nlohmann-json.md §4.3）。
+     */
+    enum class Source
+    {
+        Manual,   // 手敲
+        Import,   // 文件 / 批量导入
+        WeChat,   // 微信聊天记录导出
+    };
+
     struct TimeRange
     {
         std::chrono::sys_seconds                start;
@@ -36,6 +50,11 @@ namespace core
         std::vector<std::string> tags;         // 集合语义
         Kind                     kind = Kind::Unknown;
         bool                     confirmed = false;   // 用户是否确认过解析结果
+        Source                   source = Source::Manual;
+
+        // 墓碑：非空 = 已删除。
+        // 记录系统不物理删除（误删没救），删除只是打标记；真要清掉用 purge()。
+        std::optional<std::chrono::sys_seconds> deleted_at;
     };
 
     // 枚举 <-> 字符串。存字符串不存数字，见 docs/nlohmann-json.md §4.3。
@@ -44,4 +63,9 @@ namespace core
     // 认不出时返回 Kind::Unknown，**不抛异常** —— 读历史数据时宁可降级，
     // 也不要因为一个陌生值让整个文件读不出来。
     Kind kindFromString(std::string_view s);
+
+    std::string toString(Source s);
+
+    // 同上：认不出按 Manual 处理，不抛。
+    Source sourceFromString(std::string_view s);
 }  // namespace core

@@ -111,11 +111,18 @@ void to_json(nlohmann::json& j, const Entry& e)
         {"tags",       e.tags},                // vector<string> 有内置支持，直接给
         {"kind",       toString(e.kind)},      // 存字符串不存数字，见坑清单 #6
         {"confirmed",  e.confirmed},
+        {"source",     toString(e.source)},
     };
 
     if (e.occurred)
     {
         j["occurred"] = *e.occurred;   // 这里会调到上面 TimeRange 的 to_json
+    }
+
+    // 墓碑只在删除后写：未删除的记录不必多一个 null 字段。
+    if (e.deleted_at)
+    {
+        j["deleted_at"] = toIso(*e.deleted_at);
     }
 }
 
@@ -127,6 +134,7 @@ void from_json(const nlohmann::json& j, Entry& e)
     e.tags      = j.value("tags",      std::vector<std::string>{});
     e.kind      = kindFromString(j.value("kind", std::string{}));
     e.confirmed = j.value("confirmed", false);
+    e.source    = sourceFromString(j.value("source", std::string{"manual"}));
 
     // created_at 解析失败就保持默认（epoch）—— 不在这里报错，
     // 因为 from_json 没有地方放 warning。坏数据的警告由 load 统一收集。
@@ -134,6 +142,17 @@ void from_json(const nlohmann::json& j, Entry& e)
     if (fromIso(j.value("created_at", std::string{}), created))
     {
         e.created_at = created;
+    }
+
+    // 墓碑：解析不出来就当没删（宁可见到，也不要把记录误判成删除）。
+    e.deleted_at.reset();
+    if (j.contains("deleted_at") && j["deleted_at"].is_string())
+    {
+        std::chrono::sys_seconds deleted{};
+        if (fromIso(j["deleted_at"].get<std::string>(), deleted))
+        {
+            e.deleted_at = deleted;
+        }
     }
 
     e.occurred.reset();
@@ -174,6 +193,7 @@ std::expected<LoadResult, std::string> load(const std::filesystem::path& path)
 
     std::string line;
     int         lineNo = 0;
+    bool        headerSeen = false;
 
     while (std::getline(in, line))
     {
@@ -200,6 +220,31 @@ std::expected<LoadResult, std::string> load(const std::filesystem::path& path)
             {
                 result.warnings.push_back("第 " + std::to_string(lineNo)
                                           + " 行不是 JSON 对象，已跳过");
+                continue;
+            }
+
+            // 头部记录 {"schema": N}：不是条目，只用来判版本。
+            if (j.contains("schema") && !j.contains("id"))
+            {
+                if (!headerSeen)
+                {
+                    headerSeen = true;
+                    const int version = j.value("schema", 0);
+                    if (version > kSchemaVersion)
+                    {
+                        // 关键：不读、更不写。老程序去改新格式的文件，可能悄悄丢字段。
+                        return std::unexpected(
+                            "数据文件是更新版本的程序写的（文件版本 "
+                            + std::to_string(version) + "，本程序支持到 "
+                            + std::to_string(kSchemaVersion) + "），请升级程序后再打开");
+                    }
+                    if (version < kSchemaVersion)
+                    {
+                        result.warnings.push_back("数据文件是旧版本（" + std::to_string(version)
+                                                  + "），下次保存会自动升级到 "
+                                                  + std::to_string(kSchemaVersion));
+                    }
+                }
                 continue;
             }
 
@@ -237,6 +282,13 @@ std::expected<void, std::string> save(const std::filesystem::path& path,
         if (!out)
         {
             return std::unexpected("打不开临时文件: " + tmp.string());
+        }
+
+        // 第一行是格式版本头。老文件（没有这一行）照样能读，见 load()。
+        out << nlohmann::json{{"schema", kSchemaVersion}}.dump() << '\n';
+        if (!out)
+        {
+            return std::unexpected("写入临时文件失败: " + tmp.string());
         }
 
         for (const Entry& e : entries)

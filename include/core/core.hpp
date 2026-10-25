@@ -44,16 +44,46 @@ public:
                                           std::chrono::sys_seconds createdAt,
                                           std::optional<TimeRange> occurred = std::nullopt);
 
-    // 按 created_at 倒序（新的在前）
+    // 按 created_at 倒序（新的在前）。**不含已删除的**（墓碑对上层不可见）。
     const std::vector<Entry>& list() const;
 
+    // 含墓碑的全量（导出 / 恢复 / 排查用）。
+    const std::vector<Entry>& listAll() const;
+
+    // 只查未删除的。
     std::optional<Entry> find(std::string_view id) const;
 
-    std::expected<void, std::string> remove(std::string_view id);
+    // 查含墓碑的全量。
+    std::optional<Entry> findAny(std::string_view id) const;
+
+    // 软删除：打墓碑（deleted_at），记录仍在文件里。找不到 / 已删除都是错误。
+    // deletedAt 缺省取当前时间（墓碑不进时间轴，也不参与排序，所以不影响可测性）。
+    std::expected<void, std::string> remove(std::string_view id,
+                                            std::optional<std::chrono::sys_seconds> deletedAt = std::nullopt);
+
+    // 撤销删除：清掉墓碑。
+    std::expected<void, std::string> restore(std::string_view id);
+
+    // 物理删除：真要清掉才用它（不可恢复）。
+    std::expected<void, std::string> purge(std::string_view id);
+
+    // 按 id 整体替换（改草稿、确认解析结果都走这里）。
+    // 只允许改未删除的记录；id 必须在。
+    std::expected<void, std::string> update(const Entry& entry);
 
 private:
+    // 每次修改前的固定动作：拿独占锁 -> 重新读盘 -> 用磁盘状态覆盖内存。
+    //
+    // 只加锁不重读是不够的：两个进程各自 load 之后再写，后者会拿旧快照
+    // 覆盖前者的新增。重读才是真正解决"丢更新"的那一步。
+    std::expected<void, std::string> reloadForMutation() ;
+
+    // 由 entries_ 派生出 list() 用的可见列表（跳过墓碑）。
+    void reindexVisible();
+
     std::filesystem::path    path_;
-    std::vector<Entry>       entries_;
+    std::vector<Entry>       entries_;    // 含墓碑
+    std::vector<Entry>       visible_;    // 不含墓碑
     std::vector<std::string> warnings_;
 };
 

@@ -58,6 +58,7 @@ target_include_directories(third_party SYSTEM INTERFACE
 # ---------------------------------------------------------------------------
 add_library(core
     src/core/entry.cpp
+    src/core/file_lock.cpp
     src/core/store.cpp
     src/core/core.cpp)
 

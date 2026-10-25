@@ -3,6 +3,7 @@ add_executable(tests
     test_store.cpp      # JSONL 持久化
     test_core.cpp       # Core 门面
     test_draft_queue.cpp # 草稿队列（flow，桩实现，用例先红）
+    test_durability.cpp  # 数据基石：格式版本 / 墓碑 / 来源 / 文件锁
     test_workflow.cpp    # 编排引擎（workflow，图算法已实现，执行器先红）
     test_parse.cpp)
 
