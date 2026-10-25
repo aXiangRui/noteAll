@@ -4,6 +4,10 @@
 // 不写任何业务逻辑（"这条记录该怎么存"是 core 的事，
 // "该怎么显示"是 view 的事）。依赖方向见 docs/ROADMAP.md §0.7。
 //
+// 两种用法：
+//   note add ...        一次性命令（脚本 / 终端里用）
+//   note                不带参数 = 双击启动，进交互模式（否则窗口一闪就关，像闪退）
+//
 // 规格见 docs/ROADMAP.md §2.6。
 
 #include "core/core.hpp"
@@ -60,6 +64,49 @@ std::string toUtf8(const wchar_t* w)
     return s;
 }
 #endif
+
+/**
+ * 从标准输入读一行，转成 UTF-8。
+ *
+ * 为什么不用 std::getline：
+ *   控制台的输入代码页默认也不是 UTF-8（中文 Windows 是 GBK），
+ *   直接读字节会把中文输入弄成乱码 —— 而"记中文"是这个程序的全部意义。
+ *   控制台用 ReadConsoleW 拿宽字符再转；管道/重定向（脚本里 echo 进来）本来就是
+ *   UTF-8 字节，走 getline。
+ *
+ * @returns false = 输入结束（Ctrl+Z / 管道关闭）
+ */
+bool readLineUtf8(std::string& out)
+{
+#ifdef _WIN32
+    const HANDLE input = ::GetStdHandle(STD_INPUT_HANDLE);
+    DWORD        mode  = 0;
+    if (input != INVALID_HANDLE_VALUE && input != nullptr && ::GetConsoleMode(input, &mode) != 0)
+    {
+        wchar_t buffer[4096];
+        DWORD   read = 0;
+        if (::ReadConsoleW(input, buffer, static_cast<DWORD>(std::size(buffer) - 1), &read, nullptr) == 0)
+        {
+            return false;
+        }
+        if (read == 0)
+        {
+            return false;   // Ctrl+Z
+        }
+
+        std::wstring line(buffer, read);
+        while (!line.empty() && (line.back() == L'\r' || line.back() == L'\n'))
+        {
+            line.pop_back();
+        }
+
+        out = toUtf8(line.c_str());
+        return true;
+    }
+#endif
+
+    return static_cast<bool>(std::getline(std::cin, out));
+}
 
 // 数据文件位置：环境变量 NOTE_FILE > 当前目录的 notes.jsonl（ROADMAP §0.6）。
 std::filesystem::path dataPath()
@@ -130,22 +177,32 @@ void printHelp(std::ostream& os)
           "  note purge <id>         彻底删除（不可恢复）\n"
           "  note help               显示这个帮助\n"
           "\n"
+          "  直接运行 note（不带参数）进入交互模式，命令里不用再写开头的 note：\n"
+          "      > add 今天下午3点跟老张聊排期\n"
+          "      > list\n"
+          "      > quit\n"
+          "\n"
           "数据文件：环境变量 NOTE_FILE，默认当前目录的 notes.jsonl\n";
 }
 
-/** 真正干活的地方。跟 wmain/main 分开，是为了让上面那两个只负责把参数转成 UTF-8。 */
-int run(const std::vector<std::string>& args, view::View& v)
+// ---------------------------------------------------------------------------
+// 执行一条命令
+//
+// args[0] 是程序名，args[1] 是命令 —— 交互模式也按同样的形状拼，避免两套解析。
+// 返回：0 成功 / 1 用法错误 / 2 运行时错误
+// ---------------------------------------------------------------------------
+int execute(const std::vector<std::string>& args,
+            core::Core&                     note,
+            view::View&                     v,
+            const std::filesystem::path&    dataFile)
 {
-    // args[0] 是程序自己的名字
     if (args.size() < 2)
     {
         printHelp(std::cout);
-        return 1;   // 用法错误
+        return 1;
     }
 
     const std::string& cmd = args[1];
-
-    // ---- 先做纯参数检查，别为了一个用法错误去读磁盘 ----
 
     if (cmd == "help")
     {
@@ -158,20 +215,15 @@ int run(const std::vector<std::string>& args, view::View& v)
 
     if (cmd != "add" && cmd != "list" && !needsId)
     {
-        printHelp(std::cout);
+        v.RenderError("不认识的命令: " + cmd + "（输入 help 看用法）");
         return 1;
     }
 
     if ((cmd == "add" || needsId) && args.size() < 3)
     {
-        printHelp(std::cout);
+        v.RenderError("这个命令需要一个参数（输入 help 看用法）");
         return 1;
     }
-
-    // ---- 参数合法了，才开始读盘 ----
-
-    const std::filesystem::path dataFile = dataPath();
-    core::Core                  note{ dataFile };
 
     // 统一的失败出口：终端给用户看，日志给"事后排查"看。
     // 只对**异常**记日志：用户敲错 id 不算异常，不记。
@@ -180,20 +232,6 @@ int run(const std::vector<std::string>& args, view::View& v)
         v.RenderError(message);
         return 2;
     };
-
-    if (auto loaded = note.load(); !loaded)
-    {
-        return fail("读取数据文件失败: " + loaded.error());
-    }
-
-    // 坏行只警告、不拦人 —— 文件被手工编辑过是很正常的事（ROADMAP §2.6）。
-    // store 已经把它们写进日志了，这里只负责显示。
-    for (const auto& w : note.warnings())
-    {
-        v.RenderError(w);
-    }
-
-    // ---- 分发 ----
 
     if (cmd == "add")
     {
@@ -277,7 +315,7 @@ int run(const std::vector<std::string>& args, view::View& v)
         // 已删除的记录 find 不到，但用户可能只是记错了状态 —— 提示一句。
         if (note.findAny(args[2]))
         {
-            v.RenderError("这条记录已删除，可 note undo " + args[2] + " 恢复");
+            v.RenderError("这条记录已删除，可 undo " + args[2] + " 恢复");
         }
         else
         {
@@ -313,7 +351,7 @@ int run(const std::vector<std::string>& args, view::View& v)
             return fail(removed.error());
         }
 
-        v.RenderMessage("已删除 " + args[2] + "（可 note undo " + args[2] + " 恢复）");
+        v.RenderMessage("已删除 " + args[2] + "（可 undo " + args[2] + " 恢复）");
         return 0;
     }
 
@@ -336,6 +374,141 @@ int run(const std::vector<std::string>& args, view::View& v)
 
     v.RenderMessage("已彻底删除 " + args[2] + "（不可恢复）");
     return 0;
+}
+
+/** 读盘 + 打警告。失败返回 2。 */
+int loadOrReport(core::Core& note, view::View& v, const std::filesystem::path& dataFile)
+{
+    if (auto loaded = note.load(); !loaded)
+    {
+        const std::string message = "读取数据文件失败: " + loaded.error();
+        core::appendLog(dataFile, core::LogLevel::Error, message);
+        v.RenderError(message);
+        return 2;
+    }
+
+    // 坏行只警告、不拦人 —— 文件被手工编辑过是很正常的事（ROADMAP §2.6）。
+    // store 已经把它们写进日志了，这里只负责显示。
+    for (const auto& w : note.warnings())
+    {
+        v.RenderError(w);
+    }
+    return 0;
+}
+
+/** 交互模式：双击启动就是这个（否则窗口一闪就关，用户以为闪退）。 */
+int interactive(view::View& v)
+{
+    const std::filesystem::path dataFile = dataPath();
+    core::Core                  note{ dataFile };
+
+    if (const int code = loadOrReport(note, v, dataFile); code != 0)
+    {
+        // 读盘失败也别立刻把窗口关掉：让用户看见原因。
+        std::cout << "\n按回车退出…" << std::flush;
+        std::string ignored;
+        readLineUtf8(ignored);
+        return code;
+    }
+
+    std::cout << "note 交互模式（输入 help 看命令，quit 退出）\n"
+              << "数据文件: " << dataFile.string() << "\n\n";
+
+    for (;;)
+    {
+        std::cout << "> " << std::flush;
+
+        std::string line;
+        if (!readLineUtf8(line))
+        {
+            std::cout << '\n';   // Ctrl+Z / 管道结束
+            break;
+        }
+
+        // 切成 token：第一个是命令，其余是参数（add 会把它们再拼回一句话）。
+        std::vector<std::string> tokens;
+        std::size_t              begin = 0;
+        while (begin < line.size())
+        {
+            while (begin < line.size() && (line[begin] == ' ' || line[begin] == '\t'))
+            {
+                ++begin;
+            }
+            const std::size_t end = line.find_first_of(" \t", begin);
+            if (end == std::string::npos)
+            {
+                tokens.push_back(line.substr(begin));
+                break;
+            }
+            tokens.push_back(line.substr(begin, end - begin));
+            begin = end;
+        }
+
+        if (tokens.empty())
+        {
+            continue;
+        }
+
+        if (tokens[0] == "quit" || tokens[0] == "exit")
+        {
+            break;
+        }
+
+        // execute 期望 args[0] 是程序名，这里补一个占位，两套入口共用同一份解析。
+        std::vector<std::string> args;
+        args.reserve(tokens.size() + 1);
+        args.emplace_back("note");
+        args.insert(args.end(), tokens.begin(), tokens.end());
+
+        execute(args, note, v, dataFile);
+        std::cout << '\n';
+    }
+
+    return 0;
+}
+
+/** 一次性命令入口。 */
+int run(const std::vector<std::string>& args, view::View& v)
+{
+    // 不带参数 = 双击启动：进交互模式，别打印一堆帮助然后关窗口。
+    if (args.size() < 2)
+    {
+        return interactive(v);
+    }
+
+    const std::string& cmd = args[1];
+
+    // 先做纯参数检查，别为了一个用法错误去读磁盘。
+    if (cmd == "help")
+    {
+        printHelp(std::cout);
+        return 0;
+    }
+
+    const bool needsId = (cmd == "show" || cmd == "confirm" || cmd == "rm" || cmd == "undo" ||
+                          cmd == "purge");
+
+    if (cmd != "add" && cmd != "list" && !needsId)
+    {
+        v.RenderError("不认识的命令: " + cmd + "（输入 note help 看用法）");
+        return 1;
+    }
+
+    if ((cmd == "add" || needsId) && args.size() < 3)
+    {
+        v.RenderError("这个命令需要一个参数（输入 note help 看用法）");
+        return 1;
+    }
+
+    const std::filesystem::path dataFile = dataPath();
+    core::Core                  note{ dataFile };
+
+    if (const int code = loadOrReport(note, v, dataFile); code != 0)
+    {
+        return code;
+    }
+
+    return execute(args, note, v, dataFile);
 }
 
 }   // namespace
