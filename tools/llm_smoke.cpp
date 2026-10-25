@@ -18,6 +18,8 @@
 #include "llm/chat.hpp"
 #include "llm/http_chat_client.hpp"
 
+#include <nlohmann/json.hpp>
+
 #include <chrono>
 #include <cstdlib>
 #include <cstring>
@@ -97,6 +99,136 @@ std::string cleanKey(std::string key)
 
 }  // namespace
 
+// ---------------------------------------------------------------------------
+// --draft：验证 M2 的提示词能不能稳定产出结构化草稿
+//
+// 这是接线进 app 之前的一步：先确认「同一句话，模型能不能稳定给出
+// {summary, tags, kind} 的合法 JSON」。不稳定就改提示词，别急着写业务代码。
+// ---------------------------------------------------------------------------
+namespace
+{
+
+std::string draftPrompt(std::string const& noteText)
+{
+    return "你是笔记整理助手。把用户的一句话整理成 JSON 对象，只输出 JSON，不要解释、不要代码块。\n"
+           "\n"
+           "字段要求：\n"
+           "- summary：不超过 30 字的中文摘要，保留原文里的关键信息（人名、项目、时间）\n"
+           "- tags：2 到 4 个中文标签，字符串数组\n"
+           "- kind：只能是 event / note / todo / thought 之一\n"
+           "  （event=发生或将要发生的事，note=信息/资料，todo=待办，thought=感受想法）\n"
+           "\n"
+           "用户记录：" + noteText;
+}
+
+/** 模型偶尔会包一层 ```json 代码块，去掉再解析。 */
+std::string stripFence(std::string text)
+{
+    const auto trim = [](std::string s) {
+        const auto isSpace = [](char c) { return c == ' ' || c == '\t' || c == '\r' || c == '\n'; };
+        std::size_t b = 0;
+        while (b < s.size() && isSpace(s[b])) { ++b; }
+        std::size_t e = s.size();
+        while (e > b && isSpace(s[e - 1])) { --e; }
+        return s.substr(b, e - b);
+    };
+
+    text = trim(std::move(text));
+
+    if (text.rfind("```", 0) == 0)
+    {
+        const auto firstNewline = text.find('\n');
+        if (firstNewline != std::string::npos) { text = text.substr(firstNewline + 1); }
+        if (const auto fenceEnd = text.rfind("```"); fenceEnd != std::string::npos)
+        {
+            text = text.substr(0, fenceEnd);
+        }
+        text = trim(std::move(text));
+    }
+    return text;
+}
+
+int runDraft(llm::IChatClient& client, std::string const& noteText)
+{
+    std::cout << "[draft] 原文: " << noteText << '\n';
+
+    llm::ChatRequest request;
+    request.messages.push_back({ llm::Message::Role::User, draftPrompt(noteText) });
+    request.maxTokens   = 256;
+    request.temperature = 0.2;   // 结构化抽取要稳，不要发散
+
+    const auto started = std::chrono::steady_clock::now();
+    auto       reply   = client.complete(request);
+    const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+                             std::chrono::steady_clock::now() - started);
+
+    if (!reply)
+    {
+        std::cerr << "[draft] 请求失败 " << elapsed.count() << "ms  ["
+                  << llm::errorName(reply.error().kind) << "] http=" << reply.error().httpStatus
+                  << "\n        " << reply.error().message << '\n';
+        return 2;
+    }
+
+    std::cout << "[draft] 耗时 " << elapsed.count() << "ms，回复 " << reply->text.size() << " 字符\n";
+    std::cout << "[draft] 原始回复: " << reply->text << '\n';
+
+    // ---- 解析与校验：这一步就是 app 里要写的那段 ----
+    const std::string jsonText = stripFence(reply->text);
+
+    nlohmann::json parsed;
+    try
+    {
+        parsed = nlohmann::json::parse(jsonText);
+    }
+    catch (std::exception const& ex)
+    {
+        std::cerr << "[draft] ✗ 不是合法 JSON：" << ex.what() << '\n';
+        return 2;
+    }
+
+    if (!parsed.is_object())
+    {
+        std::cerr << "[draft] ✗ 顶层不是对象\n";
+        return 2;
+    }
+
+    bool ok = true;
+
+    const std::string summary = parsed.value("summary", std::string{});
+    if (summary.empty()) { std::cerr << "[draft] ✗ summary 缺失或为空\n"; ok = false; }
+
+    std::vector<std::string> tags;
+    if (!parsed.contains("tags") || !parsed["tags"].is_array())
+    {
+        std::cerr << "[draft] ✗ tags 不是数组\n";
+        ok = false;
+    }
+    else
+    {
+        for (auto const& tag : parsed["tags"])
+        {
+            if (tag.is_string()) { tags.push_back(tag.get<std::string>()); }
+        }
+        if (tags.empty()) { std::cerr << "[draft] ✗ tags 为空\n"; ok = false; }
+    }
+
+    const std::string kind = parsed.value("kind", std::string{});
+    if (kind != "event" && kind != "note" && kind != "todo" && kind != "thought")
+    {
+        std::cerr << "[draft] ✗ kind 不在白名单：" << kind << '\n';
+        ok = false;
+    }
+
+    std::cout << "[draft] 解析: summary=\"" << summary << "\"  kind=" << kind << "  tags=";
+    for (std::size_t i = 0; i < tags.size(); ++i) { std::cout << (i ? ", " : "") << tags[i]; }
+    std::cout << "\n[draft] 校验: " << (ok ? "✓ 通过" : "✗ 不通过") << '\n';
+
+    return ok ? 0 : 2;
+}
+
+}  // namespace
+
 int main(int argc, char** argv)
 {
 #ifdef _WIN32
@@ -147,6 +279,12 @@ int main(int argc, char** argv)
                      "       确认读到了：  if (-not $env:NOTE_LLM_KEY) { \"没读到\" } else { \"读到 \" + $env:NOTE_LLM_KEY.Length + \" 字符\" }\n";
     }
     std::cout.flush();
+
+    // --draft "<一句话>"：走 M2 的提示词，打印解析与校验结果。
+    if (const std::string noteText = valueOf(argc, argv, "--draft", ""); !noteText.empty())
+    {
+        return runDraft(**client, noteText);
+    }
 
     llm::ChatRequest request;
     request.messages.push_back({ llm::Message::Role::User, args.prompt });

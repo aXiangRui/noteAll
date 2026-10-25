@@ -170,7 +170,8 @@ target_link_libraries(parse_demo PRIVATE parse)
 if(TARGET llm)
     add_executable(llm_smoke
         tools/llm_smoke.cpp)
-    target_link_libraries(llm_smoke PRIVATE llm)
+    # third_party：--draft 模式要用 nlohmann 解析模型回复
+    target_link_libraries(llm_smoke PRIVATE llm third_party)
 endif()
 
 # ---------------------------------------------------------------------------
