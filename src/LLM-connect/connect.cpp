@@ -103,27 +103,46 @@ std::string win32Message(DWORD code)
 {
     if (code == 0) { return "无错误码"; }
 
-    wchar_t* buffer = nullptr;
-    const DWORD length = ::FormatMessageW(
-        FORMAT_MESSAGE_ALLOCATE_BUFFER | FORMAT_MESSAGE_FROM_SYSTEM | FORMAT_MESSAGE_IGNORE_INSERTS,
-        nullptr,
-        code,
-        MAKELANGID(LANG_NEUTRAL, SUBLANG_DEFAULT),
-        reinterpret_cast<wchar_t*>(&buffer),
-        0,
-        nullptr);
+    // 两步查文案：
+    //   1. 先查系统消息表（普通 Win32 错误，比如 5 = 拒绝访问）；
+    //   2. 失败再查 winhttp.dll —— 12xxx 的 WinHTTP 错误码文案只在那儿，
+    //      只查系统表会得到「Win32 错误 12185」这种谁也看不懂的东西。
+    const auto queryModule = [code](HMODULE module) -> std::string {
+        wchar_t*    buffer = nullptr;
+        const DWORD length = ::FormatMessageW(
+            FORMAT_MESSAGE_ALLOCATE_BUFFER | (module == nullptr ? FORMAT_MESSAGE_FROM_SYSTEM
+                                                                : FORMAT_MESSAGE_FROM_HMODULE) |
+                FORMAT_MESSAGE_IGNORE_INSERTS,
+            module,
+            code,
+            MAKELANGID(LANG_NEUTRAL, SUBLANG_DEFAULT),
+            reinterpret_cast<wchar_t*>(&buffer),
+            0,
+            nullptr);
 
-    std::string message;
-    if (length != 0 && buffer != nullptr)
-    {
-        message = narrow(std::wstring_view(buffer, length));
-        ::LocalFree(buffer);
-
-        // 系统文案尾巴通常带 "\r\n"，留着会让日志一行变两行。
-        while (!message.empty() && (message.back() == '\r' || message.back() == '\n' || message.back() == ' '))
+        std::string message;
+        if (length != 0 && buffer != nullptr)
         {
-            message.pop_back();
+            message = narrow(std::wstring_view(buffer, length));
+            ::LocalFree(buffer);
         }
+        return message;
+    };
+
+    std::string message = queryModule(nullptr);
+    if (message.empty())
+    {
+        if (HMODULE winhttp = ::LoadLibraryExW(L"winhttp.dll", nullptr, LOAD_LIBRARY_AS_DATAFILE))
+        {
+            message = queryModule(winhttp);
+            ::FreeLibrary(winhttp);
+        }
+    }
+
+    // 系统文案尾巴通常带 "\r\n"，留着会让日志一行变两行。
+    while (!message.empty() && (message.back() == '\r' || message.back() == '\n' || message.back() == ' '))
+    {
+        message.pop_back();
     }
 
     if (message.empty()) { message = "Win32 错误 " + std::to_string(code); }

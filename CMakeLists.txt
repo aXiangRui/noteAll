@@ -164,6 +164,15 @@ add_executable(parse_demo
     tools/parse_demo.cpp)
 target_link_libraries(parse_demo PRIVATE parse)
 
+# llm_smoke：手动验证「能不能真的发出一条消息」。
+# key 从环境变量 NOTE_LLM_KEY 读，**不走命令行**（会进 shell 历史与进程列表）。
+# 只有 Windows 上才有 llm 层。
+if(TARGET llm)
+    add_executable(llm_smoke
+        tools/llm_smoke.cpp)
+    target_link_libraries(llm_smoke PRIVATE llm)
+endif()
+
 # ---------------------------------------------------------------------------
 # 测试
 # ---------------------------------------------------------------------------

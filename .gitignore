@@ -41,3 +41,6 @@ docs/*.html
 # ---- clangd 配置（内含本机绝对路径，换机器就失效） ----
 # 想跨机器共享：提交 .clangd.example，本地复制成 .clangd 后改那两行 -I 路径。
 .clangd
+
+# ---- 本地密钥（API key 之类，绝不入库）----
+.secrets/
