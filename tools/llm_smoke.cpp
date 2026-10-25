@@ -6,14 +6,12 @@
 //
 // 用法（key **不要**写在命令行里，会进 shell 历史和进程列表）：
 //
-//     set NOTE_LLM_KEY=sk-xxxx                      # 或者 PowerShell: $env:NOTE_LLM_KEY="sk-xxxx"
-//     llm_smoke                                     # 默认打 DeepSeek
-//     llm_smoke --base http://127.0.0.1:11434 --path /v1/chat/completions --model llama3.1 --no-auth
+//     $env:NOTE_LLM_KEY = (Get-Content .secrets\deepseek.key -Raw).Trim()
+//     llm_smoke                                     # 最短请求，验证连通与鉴权
+//     llm_smoke --draft "明天下午三点跟老张开会"      # 跑 M2 的草稿提示词
+//     llm_smoke --base http://127.0.0.1:11434 --path /v1/chat/completions --model llama3.1 --no-auth --direct
 //
-// 输出示例：
-//     [ok] 1.42s  reply: 2
-//
-// 退出码：0 = 成功；2 = 失败（错误分类会打在 stderr 上）
+// 退出码：0 = 成功；1 = 用法错误；2 = 失败（错误分类打在 stderr）
 
 #include "llm/chat.hpp"
 #include "llm/http_chat_client.hpp"
@@ -30,7 +28,7 @@
 #ifdef _WIN32
 # define WIN32_LEAN_AND_MEAN
 # define NOMINMAX
-# include <windows.h>   // SetConsoleOutputCP：不设它中文输出会是乱码
+# include <windows.h>   // SetConsoleOutputCP / GetConsoleProcessList
 #endif
 
 namespace
@@ -38,12 +36,11 @@ namespace
 
 struct Args
 {
-    std::string base    = "https://api.deepseek.com";
-    std::string path    = "/chat/completions";
-    std::string model   = "deepseek-chat";
-    std::string prompt  = "用一句话回答：1+1 等于几？只输出答案。";
-    bool        noAuth  = false;
-    bool        insecure = false;
+    std::string base   = "https://api.deepseek.com";
+    std::string path   = "/chat/completions";
+    std::string model  = "deepseek-chat";
+    std::string prompt = "用一句话回答：1+1 等于几？只输出答案。";
+    bool        noAuth = false;
 };
 
 bool hasFlag(int argc, char** argv, char const* name)
@@ -79,10 +76,12 @@ std::string envOr(char const* name, std::string fallback)
     return fallback;
 }
 
-/** 去掉首尾空白与成对的引号 —— 从文件里 Get-Content 出来的 key 常常带着这些。 */
+/** 去掉首尾空白与成对的引号 —— 从文件 Get-Content 出来的 key 常常带着这些。 */
 std::string cleanKey(std::string key)
 {
-    const auto isSpace = [](char c) { return c == ' ' || c == '\t' || c == '\r' || c == '\n' || c == '\0'; };
+    const auto isSpace = [](char c) {
+        return c == ' ' || c == '\t' || c == '\r' || c == '\n' || c == '\0';
+    };
 
     std::size_t begin = 0;
     while (begin < key.size() && isSpace(key[begin])) { ++begin; }
@@ -97,16 +96,49 @@ std::string cleanKey(std::string key)
     return key;
 }
 
-}  // namespace
+/**
+ * 是不是"双击启动"（控制台里只有自己一个进程）。
+ *
+ * 命令行工具双击运行时，进程一结束窗口就没了，看着像闪退。
+ * 在终端里跑时，控制台里至少还有 shell 陪着 → 不暂停，免得脚本里卡住。
+ */
+bool launchedByDoubleClick()
+{
+#ifdef _WIN32
+    DWORD       list[2] = {};
+    const DWORD count   = ::GetConsoleProcessList(list, 2);
+    return count <= 1;
+#else
+    return false;
+#endif
+}
+
+void printUsage()
+{
+    std::cout <<
+        "llm_smoke —— 验证 llm 层能不能真的发出一条消息\n"
+        "\n"
+        "先在**同一个** PowerShell 窗口里设 key：\n"
+        "  $env:NOTE_LLM_KEY = (Get-Content .secrets\\deepseek.key -Raw).Trim()\n"
+        "\n"
+        "用法：\n"
+        "  llm_smoke                        发一条最短请求（验证连通与鉴权）\n"
+        "  llm_smoke --draft \"一句话\"       跑 M2 的草稿提示词，打印解析与校验\n"
+        "\n"
+        "可选：\n"
+        "  --base <url>      默认 https://api.deepseek.com\n"
+        "  --path <path>     默认 /chat/completions\n"
+        "  --model <name>    默认 deepseek-chat\n"
+        "  --no-auth         不发 Authorization（本地服务用）\n"
+        "  --direct          不走系统代理（连 ollama 建议加）\n";
+}
 
 // ---------------------------------------------------------------------------
 // --draft：验证 M2 的提示词能不能稳定产出结构化草稿
 //
-// 这是接线进 app 之前的一步：先确认「同一句话，模型能不能稳定给出
+// 接线进 app 之前先跑这个：确认「同一句话，模型能不能稳定给出
 // {summary, tags, kind} 的合法 JSON」。不稳定就改提示词，别急着写业务代码。
 // ---------------------------------------------------------------------------
-namespace
-{
 
 std::string draftPrompt(std::string const& noteText)
 {
@@ -125,7 +157,9 @@ std::string draftPrompt(std::string const& noteText)
 std::string stripFence(std::string text)
 {
     const auto trim = [](std::string s) {
-        const auto isSpace = [](char c) { return c == ' ' || c == '\t' || c == '\r' || c == '\n'; };
+        const auto isSpace = [](char c) {
+            return c == ' ' || c == '\t' || c == '\r' || c == '\n';
+        };
         std::size_t b = 0;
         while (b < s.size() && isSpace(s[b])) { ++b; }
         std::size_t e = s.size();
@@ -196,7 +230,11 @@ int runDraft(llm::IChatClient& client, std::string const& noteText)
     bool ok = true;
 
     const std::string summary = parsed.value("summary", std::string{});
-    if (summary.empty()) { std::cerr << "[draft] ✗ summary 缺失或为空\n"; ok = false; }
+    if (summary.empty())
+    {
+        std::cerr << "[draft] ✗ summary 缺失或为空\n";
+        ok = false;
+    }
 
     std::vector<std::string> tags;
     if (!parsed.contains("tags") || !parsed["tags"].is_array())
@@ -210,7 +248,11 @@ int runDraft(llm::IChatClient& client, std::string const& noteText)
         {
             if (tag.is_string()) { tags.push_back(tag.get<std::string>()); }
         }
-        if (tags.empty()) { std::cerr << "[draft] ✗ tags 为空\n"; ok = false; }
+        if (tags.empty())
+        {
+            std::cerr << "[draft] ✗ tags 为空\n";
+            ok = false;
+        }
     }
 
     const std::string kind = parsed.value("kind", std::string{});
@@ -236,6 +278,20 @@ int main(int argc, char** argv)
     ::SetConsoleOutputCP(CP_UTF8);
 #endif
 
+    // 双击 / 无参数：打印用法，并停住等回车 —— 别让窗口一闪就关。
+    if (argc <= 1)
+    {
+        printUsage();
+        if (launchedByDoubleClick())
+        {
+            std::cout << "\n按回车退出…" << std::flush;
+            std::string ignored;
+            std::getline(std::cin, ignored);
+            return 0;
+        }
+        return 1;
+    }
+
     Args args;
     args.base   = valueOf(argc, argv, "--base", args.base);
     args.path   = valueOf(argc, argv, "--path", args.path);
@@ -243,7 +299,7 @@ int main(int argc, char** argv)
     args.prompt = valueOf(argc, argv, "--prompt", args.prompt);
     args.noAuth = hasFlag(argc, argv, "--no-auth");
 
-    std::string apiKey = args.noAuth ? std::string{} : cleanKey(envOr("NOTE_LLM_KEY", ""));
+    const std::string apiKey = args.noAuth ? std::string{} : cleanKey(envOr("NOTE_LLM_KEY", ""));
 
     llm::ChatConfig config;
     config.baseUrl = args.base;
@@ -268,7 +324,8 @@ int main(int argc, char** argv)
 
     std::cout << "请求: base=" << args.base << " path=" << args.path << " model=" << args.model
               << " auth=" << (args.noAuth ? "no"
-                                          : (apiKey.empty() ? "缺 key" : "bearer(" + std::to_string(apiKey.size()) + " 字符)"))
+                                          : (apiKey.empty() ? "缺 key"
+                                                            : "bearer(" + std::to_string(apiKey.size()) + " 字符)"))
               << "\n";
 
     if (!args.noAuth && apiKey.empty())
