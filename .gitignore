@@ -44,3 +44,7 @@ docs/*.html
 
 # ---- 本地密钥（API key 之类，绝不入库）----
 .secrets/
+
+# ---- dist/ 里的测试运行产物（exe 已按 *.exe 忽略）----
+dist/*.jsonl
+dist/*.lock
