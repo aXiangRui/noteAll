@@ -7,6 +7,7 @@
 // 规格见 docs/ROADMAP.md §2.6。
 
 #include "core/core.hpp"
+#include "core/note_log.hpp"
 #include "parse/timeParse.hpp"
 #include "view/console_view.hpp"
 
@@ -169,15 +170,24 @@ int run(const std::vector<std::string>& args, view::View& v)
 
     // ---- 参数合法了，才开始读盘 ----
 
-    core::Core note{dataPath()};
+    const std::filesystem::path dataFile = dataPath();
+    core::Core                  note{ dataFile };
+
+    // 统一的失败出口：终端给用户看，日志给"事后排查"看。
+    // 只对**异常**记日志：用户敲错 id 不算异常，不记。
+    const auto fail = [&](const std::string& message) {
+        core::appendLog(dataFile, core::LogLevel::Error, message);
+        v.RenderError(message);
+        return 2;
+    };
 
     if (auto loaded = note.load(); !loaded)
     {
-        v.RenderError("读取数据文件失败: " + loaded.error());
-        return 2;   // 运行时错误
+        return fail("读取数据文件失败: " + loaded.error());
     }
 
     // 坏行只警告、不拦人 —— 文件被手工编辑过是很正常的事（ROADMAP §2.6）。
+    // store 已经把它们写进日志了，这里只负责显示。
     for (const auto& w : note.warnings())
     {
         v.RenderError(w);
@@ -220,8 +230,7 @@ int run(const std::vector<std::string>& args, view::View& v)
         auto added = note.add(text, createdAt, occurred);
         if (!added)
         {
-            v.RenderError("保存失败: " + added.error());
-            return 2;
+            return fail("记录失败: " + added.error());
         }
 
         v.RenderMessage("已记录 " + added->id);
@@ -290,8 +299,7 @@ int run(const std::vector<std::string>& args, view::View& v)
 
         if (auto updated = note.update(*found); !updated)
         {
-            v.RenderError("确认失败: " + updated.error());
-            return 2;
+            return fail("确认失败: " + updated.error());
         }
 
         v.RenderMessage("已确认 " + args[2]);
@@ -302,8 +310,7 @@ int run(const std::vector<std::string>& args, view::View& v)
     {
         if (auto removed = note.remove(args[2]); !removed)
         {
-            v.RenderError(removed.error());
-            return 2;
+            return fail(removed.error());
         }
 
         v.RenderMessage("已删除 " + args[2] + "（可 note undo " + args[2] + " 恢复）");
@@ -314,8 +321,7 @@ int run(const std::vector<std::string>& args, view::View& v)
     {
         if (auto restored = note.restore(args[2]); !restored)
         {
-            v.RenderError(restored.error());
-            return 2;
+            return fail(restored.error());
         }
 
         v.RenderMessage("已恢复 " + args[2]);
@@ -325,8 +331,7 @@ int run(const std::vector<std::string>& args, view::View& v)
     // cmd == "purge"
     if (auto purged = note.purge(args[2]); !purged)
     {
-        v.RenderError(purged.error());
-        return 2;
+        return fail(purged.error());
     }
 
     v.RenderMessage("已彻底删除 " + args[2] + "（不可恢复）");

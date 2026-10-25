@@ -1,5 +1,7 @@
 #include "core/file_lock.hpp"
 
+#include "core/note_log.hpp"
+
 #include <chrono>
 #include <string>
 #include <thread>
@@ -31,6 +33,10 @@ std::expected<FileLock, std::string> FileLock::acquire(std::filesystem::path con
 
     const auto deadline = std::chrono::steady_clock::now() + timeout;
 
+    // 记录最后一次失败原因：超时的提示里带上它，偶发问题才有线索可查。
+    // （实测遇到过一次"重试 2 秒都失败、下一次又好了"，当时没记错误码，完全靠猜。）
+    long lastError = 0;
+
     for (;;)
     {
 #ifdef _WIN32
@@ -50,6 +56,7 @@ std::expected<FileLock, std::string> FileLock::acquire(std::filesystem::path con
         }
 
         const DWORD error = ::GetLastError();
+        lastError = static_cast<long>(error);
         if (error != ERROR_SHARING_VIOLATION && error != ERROR_ACCESS_DENIED)
         {
             return std::unexpected("无法创建锁文件: " + lockPath.string()
@@ -72,8 +79,15 @@ std::expected<FileLock, std::string> FileLock::acquire(std::filesystem::path con
 
         if (std::chrono::steady_clock::now() >= deadline)
         {
-            return std::unexpected("另一个 note 进程正在写数据（" + lockPath.string()
-                                   + "），请等它结束再试");
+            std::string message = "另一个 note 进程正在写数据（" + lockPath.string()
+                                  + "），请等它结束再试";
+            if (lastError != 0)
+            {
+                message += "（最后一次失败：Win32 错误 " + std::to_string(lastError) + "）";
+            }
+            // 锁竞争说明并发用错了，值得在日志里留下痕迹（否则只在终端闪一下）
+            appendLog(dataFile, LogLevel::Error, message);
+            return std::unexpected(message);
         }
         std::this_thread::sleep_for(RETRY_INTERVAL);
     }

@@ -32,10 +32,8 @@ compile_commands.json
 docs/*.pdf
 docs/*.html
 
-# ---- 一次性日志 ----
-vc.log
-cfg.log
-test.log
+# ---- 日志（构建日志 + note 的运行日志 <数据文件>.log） ----
+*.log
 
 # ---- DSH 会话/工作区状态（个人环境，不进库） ----
 .dsh/

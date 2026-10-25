@@ -1,5 +1,7 @@
 #include "core/store.hpp"
 
+#include "core/note_log.hpp"
+
 #include <chrono>
 #include <format>
 #include <fstream>
@@ -218,8 +220,9 @@ std::expected<LoadResult, std::string> load(const std::filesystem::path& path)
 
             if (!j.is_object())
             {
-                result.warnings.push_back("第 " + std::to_string(lineNo)
-                                          + " 行不是 JSON 对象，已跳过");
+                const std::string warning = "第 " + std::to_string(lineNo) + " 行不是 JSON 对象，已跳过";
+                result.warnings.push_back(warning);
+                appendLog(path, LogLevel::Warn, warning);
                 continue;
             }
 
@@ -240,9 +243,11 @@ std::expected<LoadResult, std::string> load(const std::filesystem::path& path)
                     }
                     if (version < kSchemaVersion)
                     {
-                        result.warnings.push_back("数据文件是旧版本（" + std::to_string(version)
-                                                  + "），下次保存会自动升级到 "
-                                                  + std::to_string(kSchemaVersion));
+                        const std::string warning = "数据文件是旧版本（" + std::to_string(version)
+                                                    + "），下次保存会自动升级到 "
+                                                    + std::to_string(kSchemaVersion);
+                        result.warnings.push_back(warning);
+                        appendLog(path, LogLevel::Warn, warning);
                     }
                 }
                 continue;
@@ -252,9 +257,10 @@ std::expected<LoadResult, std::string> load(const std::filesystem::path& path)
         }
         catch (const nlohmann::json::exception& ex)
         {
-            
-            result.warnings.push_back("第 " + std::to_string(lineNo)
-                                      + " 行解析失败，已跳过：" + ex.what());
+            const std::string warning = "第 " + std::to_string(lineNo) + " 行解析失败，已跳过："
+                                        + ex.what();
+            result.warnings.push_back(warning);
+            appendLog(path, LogLevel::Warn, warning);
         }
     }
 
