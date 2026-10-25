@@ -1006,3 +1006,52 @@ TEST_CASE("日期区间：猜出来的年份被推到下一年、跨度又过大
     CHECK(explicitYear.occurred->start == date(2026, 3, 1));
     CHECK(*explicitYear.occurred->end   == date(2027, 2, 2));   // 含 2/1 整天
 }
+
+// ---------------------------------------------------------------------------
+// 中文数字的钟点（M1.5 补的）
+//
+// 中文输入里「四点」比「4点」还常见，所以钟点这一处认中文数字。
+// 日期里的中文数字（二十号 / 三月五号）**仍然不支持** —— 缺月份时歧义大。
+// ---------------------------------------------------------------------------
+
+TEST_CASE("中文数字钟点：三点 / 十点半 / 十点十五分")
+{
+    // 用户的原话：后天下午四点
+    CHECK(startedAt("后天下午四点") == date(2026, 10, 10) + 16h);
+
+    CHECK(startedAt("三点")       == date(2026, 10, 8) + 3h);    // 没时段词按字面
+    CHECK(startedAt("下午三点")   == date(2026, 10, 8) + 15h);
+    CHECK(startedAt("十点半")     == date(2026, 10, 8) + 10h + 30min);
+    CHECK(startedAt("十点十五分") == date(2026, 10, 8) + 10h + 15min);
+    CHECK(startedAt("晚上十一点") == date(2026, 10, 8) + 23h);
+    CHECK(startedAt("两点半")     == date(2026, 10, 8) + 2h + 30min);
+    CHECK(startedAt("凌晨零点")   == date(2026, 10, 8));
+
+    // 十二点 / 零点这种边界，中文数字要和阿拉伯数字表现一致
+    CHECK(startedAt("十二点") == startedAt("12点"));
+    CHECK(startedAt("零点")   == startedAt("0点"));
+}
+
+TEST_CASE("中文数字也能组成区间，并且时段词照旧沿用")
+{
+    const auto span = parse::parseTime("下午三点到五点", BASE);
+    REQUIRE(span.occurred.has_value());
+    REQUIRE(span.occurred->end.has_value());
+    CHECK(span.occurred->start == date(2026, 10, 8) + 15h);
+    CHECK(*span.occurred->end  == date(2026, 10, 8) + 17h);
+
+    const auto literal = parse::parseTime("三点到五点", BASE);
+    REQUIRE(literal.occurred.has_value());
+    REQUIRE(literal.occurred->end.has_value());
+    CHECK(literal.occurred->start == date(2026, 10, 8) + 3h);
+    CHECK(*literal.occurred->end  == date(2026, 10, 8) + 5h);
+}
+
+TEST_CASE("中文数字的边界：24 点不支持，日期里的中文数字也不支持")
+{
+    CHECK_FALSE(parse::parseTime("二十四点", BASE).occurred.has_value());
+    CHECK_FALSE(parse::parseTime("二十号", BASE).occurred.has_value());
+
+    // 认不出就整句不吃，原文留在 remainder 里（不猜）
+    CHECK(parse::parseTime("二十四点", BASE).remainder == "二十四点");
+}

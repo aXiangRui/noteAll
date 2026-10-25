@@ -48,6 +48,99 @@ namespace parse
             return std::make_pair(v, n);
         }
 
+        // 中文数字：一 二 两 三 … 十 十一 … 二十 … 五十九
+        //
+        // 只服务「钟点」这一处（三点 / 十点半 / 十点十五分），**不碰日期** ——
+        // 「二十号」「三月五号」仍然不支持（缺月份的中文日期歧义大，见 parse-time.md §3.5）。
+        //
+        // 返回 (值, 吃掉几个字节)。中文数字一个字 3 字节，所以长度按 word.size() 累加，
+        // 别写死 1 —— 那是按"字符数"算，UTF-8 下会错位。
+        std::optional<std::pair<int, std::size_t>> readChineseNumber(std::string_view s)
+        {
+            struct Word
+            {
+                std::string_view text_;
+                int              value_;
+            };
+
+            static constexpr Word UNITS[] = {
+                { "零", 0 }, { "〇", 0 }, { "一", 1 }, { "二", 2 }, { "两", 2 }, { "三", 3 },
+                { "四", 4 }, { "五", 5 }, { "六", 6 }, { "七", 7 }, { "八", 8 }, { "九", 9 },
+            };
+
+            // 在 s 的开头读一个「个位字」。
+            const auto takeUnit = [](std::string_view rest) -> std::optional<std::pair<int, std::size_t>>
+            {
+                for( const auto& w : UNITS )
+                {
+                    if( rest.starts_with(w.text_) )
+                    {
+                        return std::make_pair(w.value_, w.text_.size());
+                    }
+                }
+                return std::nullopt;
+            };
+
+            constexpr std::size_t TEN_LEN = 3;   // "十" 的字节数
+
+            // 形如 十 / 十一 / 十三
+            if( s.starts_with("十") )
+            {
+                std::size_t used  = TEN_LEN;
+                int         value = 10;
+
+                if( const auto unit = takeUnit(s.substr(used)) )
+                {
+                    value += unit->first;
+                    used  += unit->second;
+                }
+
+                if( value > 59 )
+                {
+                    return std::nullopt;
+                }
+                return std::make_pair(value, used);
+            }
+
+            const auto first = takeUnit(s);
+            if( !first )
+            {
+                return std::nullopt;
+            }
+
+            std::size_t used  = first->second;
+            int         value = first->first;
+
+            // 形如 二十 / 二十三
+            if( s.substr(used).starts_with("十") )
+            {
+                used  += TEN_LEN;
+                value  = first->first * 10;
+
+                if( const auto unit = takeUnit(s.substr(used)) )
+                {
+                    value += unit->first;
+                    used  += unit->second;
+                }
+            }
+
+            if( value > 59 )
+            {
+                return std::nullopt;
+            }
+            return std::make_pair(value, used);
+        }
+
+        // 钟点里的数：先试阿拉伯数字（15点 / 9点半），再试中文数字（三点 / 十点半）。
+        std::optional<std::pair<int, std::size_t>> readClockNumber(std::string_view s)
+        {
+            if( const auto arabic = readNumber(s, 1, 2) )
+            {
+                return arabic;
+            }
+            return readChineseNumber(s);
+        }
+
         // ═══════════════════════════════════════════════════════════════════
         // 后缀（时刻）
         // ═══════════════════════════════════════════════════════════════════
@@ -166,8 +259,8 @@ namespace parse
                                  fix->dayOffset_, minutePos + m->second };
             }
 
-            // 形式乙：15点 / 9点半 / 15点30分
-            const auto h = readNumber(s, 1, 2);
+            // 形式乙：15点 / 9点半 / 15点30分 / 三点 / 十点半
+            const auto h = readClockNumber(s);
             if( !h || !at(s, h->second, "点") )     // 「点」占 3 字节
             {
                 return std::nullopt;
@@ -181,7 +274,7 @@ namespace parse
                 extra = std::chrono::minutes{ 30 };
                 pos  += 3;
             }
-            else if( const auto m = readNumber(s.substr(pos), 1, 2); m && at(s, pos + m->second, "分") )
+            else if( const auto m = readClockNumber(s.substr(pos)); m && at(s, pos + m->second, "分") )
             {
                 if( m->first > 59 )
                 {
