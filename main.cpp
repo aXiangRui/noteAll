@@ -16,8 +16,10 @@
 #include "view/console_view.hpp"
 
 #include <chrono>
+#include <cstddef>
 #include <cstdlib>
 #include <filesystem>
+#include <format>
 #include <iostream>
 #include <optional>
 #include <string>
@@ -175,6 +177,7 @@ void printHelp(std::ostream& os)
           "  note rm <id>            删除（软删除，可 note undo 恢复）\n"
           "  note undo <id>          撤销删除\n"
           "  note purge <id>         彻底删除（不可恢复）\n"
+          "  note parse <文本...>    只试一下时间解析，不写盘（排查「为什么不识别」用）\n"
           "  note help               显示这个帮助\n"
           "\n"
           "  直接运行 note（不带参数）进入交互模式，命令里不用再写开头的 note：\n"
@@ -191,6 +194,29 @@ void printHelp(std::ostream& os)
 // args[0] 是程序名，args[1] 是命令 —— 交互模式也按同样的形状拼，避免两套解析。
 // 返回：0 成功 / 1 用法错误 / 2 运行时错误
 // ---------------------------------------------------------------------------
+
+/** 把 args[from..] 用空格拼回一句话（add / parse 共用）。 */
+std::string joinArgs(const std::vector<std::string>& args, std::size_t from)
+{
+    std::string text;
+    for (std::size_t i = from; i < args.size(); ++i)
+    {
+        if (i > from)
+        {
+            text += ' ';
+        }
+        text += args[i];
+    }
+    return text;
+}
+
+/** UTC 时刻 -> 本地可读时间（解析结果给人看用）。 */
+std::string localText(std::chrono::sys_seconds utc)
+{
+    const std::chrono::zoned_time zt{std::chrono::current_zone(), utc};
+    return std::format("{:%Y-%m-%d %H:%M}", zt);
+}
+
 int execute(const std::vector<std::string>& args,
             core::Core&                     note,
             view::View&                     v,
@@ -207,6 +233,46 @@ int execute(const std::vector<std::string>& args,
     if (cmd == "help")
     {
         printHelp(std::cout);
+        return 0;
+    }
+
+    // ---- parse：干跑，只解析不写盘 ----
+    //
+    // 存在的意义：用户说"这条没识别出时间"时，不用先存进去再看 show，
+    // 直接拿原句跑一遍，立刻看到「解析成什么 + 剩下什么没被吃掉」。
+    if (cmd == "parse")
+    {
+        if (args.size() < 3)
+        {
+            v.RenderError("用法：note parse <文本...>");
+            return 1;
+        }
+
+        const std::string parsedText = joinArgs(args, 2);
+        const auto        base       = nowUtc();
+        const auto        parsed     = parse::parseTime(parsedText, utcToLocalWall(base));
+
+        std::cout << "输入　" << parsedText << '\n';
+
+        if (parsed.occurred)
+        {
+            const auto start = localWallToUtc(parsed.occurred->start);
+            if (parsed.occurred->end)
+            {
+                std::cout << "时段　" << localText(start) << "  →  "
+                          << localText(localWallToUtc(*parsed.occurred->end)) << "（本地时间）\n";
+            }
+            else
+            {
+                std::cout << "时间　" << localText(start) << "（本地时间）\n";
+            }
+        }
+        else
+        {
+            std::cout << "时间　（没解析出时间 —— 原文仍会原样保存进 raw_text）\n";
+        }
+
+        std::cout << "剩余　[" << parsed.remainder << "]\n";
         return 0;
     }
 
@@ -488,13 +554,13 @@ int run(const std::vector<std::string>& args, view::View& v)
     const bool needsId = (cmd == "show" || cmd == "confirm" || cmd == "rm" || cmd == "undo" ||
                           cmd == "purge");
 
-    if (cmd != "add" && cmd != "list" && !needsId)
+    if (cmd != "add" && cmd != "list" && cmd != "parse" && !needsId)
     {
         v.RenderError("不认识的命令: " + cmd + "（输入 note help 看用法）");
         return 1;
     }
 
-    if ((cmd == "add" || needsId) && args.size() < 3)
+    if ((cmd == "add" || cmd == "parse" || needsId) && args.size() < 3)
     {
         v.RenderError("这个命令需要一个参数（输入 note help 看用法）");
         return 1;
