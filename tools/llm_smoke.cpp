@@ -11,6 +11,10 @@
 //     llm_smoke --draft "明天下午三点跟老张开会"      # 跑 M2 的草稿提示词
 //     llm_smoke --base http://127.0.0.1:11434 --path /v1/chat/completions --model llama3.1 --no-auth --direct
 //
+// ⚠️ Windows 上用 wmain 接收参数：main(int, char**) 里的 argv 是系统 ANSI 代码页
+//    （中文 Windows 是 GBK），中文会变成非法 UTF-8，塞进 json 直接抛异常。
+//    这和 main.cpp 里 note 的处理是同一个坑，别再踩第二次。
+//
 // 退出码：0 = 成功；1 = 用法错误；2 = 失败（错误分类打在 stderr）
 
 #include "llm/chat.hpp"
@@ -20,61 +24,35 @@
 
 #include <chrono>
 #include <cstdlib>
-#include <cstring>
+#include <exception>
 #include <iostream>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #ifdef _WIN32
 # define WIN32_LEAN_AND_MEAN
 # define NOMINMAX
-# include <windows.h>   // SetConsoleOutputCP / GetConsoleProcessList
+# include <windows.h>   // SetConsoleOutputCP / GetConsoleProcessList / WideCharToMultiByte
 #endif
 
 namespace
 {
 
-struct Args
+#ifdef _WIN32
+std::string toUtf8(wchar_t const* w)
 {
-    std::string base   = "https://api.deepseek.com";
-    std::string path   = "/chat/completions";
-    std::string model  = "deepseek-chat";
-    std::string prompt = "用一句话回答：1+1 等于几？只输出答案。";
-    bool        noAuth = false;
-};
+    if (w == nullptr) { return {}; }
 
-bool hasFlag(int argc, char** argv, char const* name)
-{
-    for (int i = 1; i < argc; ++i)
-    {
-        if (std::strcmp(argv[i], name) == 0)
-        {
-            return true;
-        }
-    }
-    return false;
-}
+    const int n = ::WideCharToMultiByte(CP_UTF8, 0, w, -1, nullptr, 0, nullptr, nullptr);
+    if (n <= 0) { return {}; }
 
-std::string valueOf(int argc, char** argv, char const* name, std::string fallback)
-{
-    for (int i = 1; i + 1 < argc; ++i)
-    {
-        if (std::strcmp(argv[i], name) == 0)
-        {
-            return argv[i + 1];
-        }
-    }
-    return fallback;
+    std::string s(static_cast<std::size_t>(n), '\0');
+    ::WideCharToMultiByte(CP_UTF8, 0, w, -1, s.data(), n, nullptr, nullptr);
+    s.resize(static_cast<std::size_t>(n) - 1);
+    return s;
 }
-
-std::string envOr(char const* name, std::string fallback)
-{
-    if (char const* value = std::getenv(name); value != nullptr && *value != '\0')
-    {
-        return value;
-    }
-    return fallback;
-}
+#endif
 
 /** 去掉首尾空白与成对的引号 —— 从文件 Get-Content 出来的 key 常常带着这些。 */
 std::string cleanKey(std::string key)
@@ -192,7 +170,20 @@ int runDraft(llm::IChatClient& client, std::string const& noteText)
     request.temperature = 0.2;   // 结构化抽取要稳，不要发散
 
     const auto started = std::chrono::steady_clock::now();
-    auto       reply   = client.complete(request);
+
+    std::expected<llm::ChatReply, llm::ChatError> reply = std::unexpected(
+        llm::ChatError{ llm::ChatErrorKind::BadResponse, 0, "请求没有执行" });
+    try
+    {
+        reply = client.complete(request);
+    }
+    catch (std::exception const& ex)
+    {
+        // 走到这里通常是"送进去的字符串不是合法 UTF-8"之类的编程/环境错误。
+        std::cerr << "[draft] ✗ 请求抛异常: " << ex.what() << '\n';
+        return 2;
+    }
+
     const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
                              std::chrono::steady_clock::now() - started);
 
@@ -269,17 +260,27 @@ int runDraft(llm::IChatClient& client, std::string const& noteText)
     return ok ? 0 : 2;
 }
 
-}  // namespace
-
-int main(int argc, char** argv)
+/** 真正干活的地方。参数已经是 UTF-8（见 wmain）。 */
+int run(std::vector<std::string> const& argv)
 {
-#ifdef _WIN32
-    // 控制台默认不是 UTF-8，不设这行中文输出会变成「璇锋眰」这种乱码。
-    ::SetConsoleOutputCP(CP_UTF8);
-#endif
+    const auto hasFlag = [&argv](std::string_view name) {
+        for (std::size_t i = 1; i < argv.size(); ++i)
+        {
+            if (argv[i] == name) { return true; }
+        }
+        return false;
+    };
+
+    const auto valueOf = [&argv](std::string_view name, std::string fallback) {
+        for (std::size_t i = 1; i + 1 < argv.size(); ++i)
+        {
+            if (argv[i] == name) { return argv[i + 1]; }
+        }
+        return fallback;
+    };
 
     // 双击 / 无参数：打印用法，并停住等回车 —— 别让窗口一闪就关。
-    if (argc <= 1)
+    if (argv.size() <= 1)
     {
         printUsage();
         if (launchedByDoubleClick())
@@ -292,23 +293,23 @@ int main(int argc, char** argv)
         return 1;
     }
 
-    Args args;
-    args.base   = valueOf(argc, argv, "--base", args.base);
-    args.path   = valueOf(argc, argv, "--path", args.path);
-    args.model  = valueOf(argc, argv, "--model", args.model);
-    args.prompt = valueOf(argc, argv, "--prompt", args.prompt);
-    args.noAuth = hasFlag(argc, argv, "--no-auth");
-
-    const std::string apiKey = args.noAuth ? std::string{} : cleanKey(envOr("NOTE_LLM_KEY", ""));
+    const std::string base    = valueOf("--base", "https://api.deepseek.com");
+    const std::string path    = valueOf("--path", "/chat/completions");
+    const std::string model   = valueOf("--model", "deepseek-chat");
+    const std::string prompt  = valueOf("--prompt", "用一句话回答：1+1 等于几？只输出答案。");
+    const bool        noAuth  = hasFlag("--no-auth");
+    const std::string apiKey  = noAuth ? std::string{} : cleanKey(std::getenv("NOTE_LLM_KEY") == nullptr
+                                                                      ? std::string{}
+                                                                      : std::string{std::getenv("NOTE_LLM_KEY")});
 
     llm::ChatConfig config;
-    config.baseUrl = args.base;
-    config.path    = args.path;
-    config.model   = args.model;
+    config.baseUrl = base;
+    config.path    = path;
+    config.model   = model;
     config.apiKey  = apiKey;
 
     // 本地服务（ollama / llama.cpp）通常是 http，而且不该被系统代理劫持。
-    if (args.base.rfind("http://", 0) == 0 || hasFlag(argc, argv, "--direct"))
+    if (base.rfind("http://", 0) == 0 || hasFlag("--direct"))
     {
         config.transport.proxyMode = net::ConnectOptions::ProxyMode::Direct;
     }
@@ -322,29 +323,28 @@ int main(int argc, char** argv)
         return 2;
     }
 
-    std::cout << "请求: base=" << args.base << " path=" << args.path << " model=" << args.model
-              << " auth=" << (args.noAuth ? "no"
-                                          : (apiKey.empty() ? "缺 key"
-                                                            : "bearer(" + std::to_string(apiKey.size()) + " 字符)"))
+    std::cout << "请求: base=" << base << " path=" << path << " model=" << model
+              << " auth=" << (noAuth ? "no"
+                                     : (apiKey.empty() ? "缺 key"
+                                                       : "bearer(" + std::to_string(apiKey.size()) + " 字符)"))
               << "\n";
 
-    if (!args.noAuth && apiKey.empty())
+    if (!noAuth && apiKey.empty())
     {
         std::cerr << "[warn] 没读到环境变量 NOTE_LLM_KEY —— 这次请求不会带 Authorization，401 是预期的。\n"
                      "       请在**同一个** PowerShell 窗口里先执行：\n"
-                     "         $env:NOTE_LLM_KEY = (Get-Content .secrets\\deepseek.key -Raw).Trim()\n"
-                     "       确认读到了：  if (-not $env:NOTE_LLM_KEY) { \"没读到\" } else { \"读到 \" + $env:NOTE_LLM_KEY.Length + \" 字符\" }\n";
+                     "         $env:NOTE_LLM_KEY = (Get-Content .secrets\\deepseek.key -Raw).Trim()\n";
     }
     std::cout.flush();
 
     // --draft "<一句话>"：走 M2 的提示词，打印解析与校验结果。
-    if (const std::string noteText = valueOf(argc, argv, "--draft", ""); !noteText.empty())
+    if (const std::string noteText = valueOf("--draft", ""); !noteText.empty())
     {
         return runDraft(**client, noteText);
     }
 
     llm::ChatRequest request;
-    request.messages.push_back({ llm::Message::Role::User, args.prompt });
+    request.messages.push_back({ llm::Message::Role::User, prompt });
     request.maxTokens   = 16;      // 测试用，越短越省钱
     request.temperature = 0.0;
 
@@ -365,3 +365,48 @@ int main(int argc, char** argv)
     std::cout << "[ok] " << elapsed.count() << "ms  reply: " << reply->text << '\n';
     return 0;
 }
+
+}  // namespace
+
+#ifdef _WIN32
+
+int wmain(int argc, wchar_t** wargv)
+{
+    ::SetConsoleOutputCP(CP_UTF8);
+
+    std::vector<std::string> args;
+    args.reserve(static_cast<std::size_t>(argc));
+    for (int i = 0; i < argc; ++i) { args.push_back(toUtf8(wargv[i])); }
+
+    // 兜住一切漏网的异常：命令行工具崩掉不该只留一个空窗口。
+    try
+    {
+        return run(args);
+    }
+    catch (std::exception const& ex)
+    {
+        std::cerr << "[fail] 未捕获异常: " << ex.what() << '\n';
+        return 2;
+    }
+}
+
+#else
+
+int main(int argc, char** argv)
+{
+    std::vector<std::string> args;
+    args.reserve(static_cast<std::size_t>(argc));
+    for (int i = 0; i < argc; ++i) { args.push_back(argv[i]); }
+
+    try
+    {
+        return run(args);
+    }
+    catch (std::exception const& ex)
+    {
+        std::cerr << "[fail] 未捕获异常: " << ex.what() << '\n';
+        return 2;
+    }
+}
+
+#endif
