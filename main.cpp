@@ -119,14 +119,20 @@ std::chrono::sys_seconds localWallToUtc(std::chrono::sys_seconds wall)
 void printHelp(std::ostream& os)
 {
     os << "用法:\n"
-          "  note add <文本...>    追加一条记录\n"
-          "  note list             列出全部（按时间倒序）\n"
-          "  note show <id>        看一条的详情\n"
-          "  note rm <id>          删一条\n"
-          "  note help             显示这个帮助\n";
+          "  note add <文本...>      追加一条记录（会尝试解析「上周三」「下午3点」这类时间）\n"
+          "  note list               列出全部（按时间倒序，不含已删除）\n"
+          "  note list --deleted     只列出已删除的（准备恢复 / 彻底删）\n"
+          "  note show <id>          看一条的详情\n"
+          "  note confirm <id>       标记「已确认」（草稿转正）\n"
+          "  note rm <id>            删除（软删除，可 note undo 恢复）\n"
+          "  note undo <id>          撤销删除\n"
+          "  note purge <id>         彻底删除（不可恢复）\n"
+          "  note help               显示这个帮助\n"
+          "\n"
+          "数据文件：环境变量 NOTE_FILE，默认当前目录的 notes.jsonl\n";
 }
 
-// 真正的逻辑。跟 wmain/main 分开，是为了让上面那两个只负责"把参数转成 UTF-8"。
+/** 真正干活的地方。跟 wmain/main 分开，是为了让上面那两个只负责把参数转成 UTF-8。 */
 int run(const std::vector<std::string>& args, view::View& v)
 {
     // args[0] 是程序自己的名字
@@ -146,14 +152,15 @@ int run(const std::vector<std::string>& args, view::View& v)
         return 0;
     }
 
-    if (cmd != "add" && cmd != "list" && cmd != "show" && cmd != "rm")
+    const bool needsId = (cmd == "show" || cmd == "confirm" || cmd == "rm" || cmd == "undo" ||
+                          cmd == "purge");
+
+    if (cmd != "add" && cmd != "list" && !needsId)
     {
-        // 命令不认识
         printHelp(std::cout);
         return 1;
     }
 
-    const bool needsId = (cmd == "show" || cmd == "rm");
     if ((cmd == "add" || needsId) && args.size() < 3)
     {
         printHelp(std::cout);
@@ -223,6 +230,29 @@ int run(const std::vector<std::string>& args, view::View& v)
 
     if (cmd == "list")
     {
+        // 默认只看活的；--deleted 只看墓碑（恢复 / 彻底删之前要能看到 id）。
+        if (args.size() >= 3 && args[2] == "--deleted")
+        {
+            std::vector<core::Entry> deleted;
+            for (const auto& e : note.listAll())
+            {
+                if (e.deleted_at)
+                {
+                    deleted.push_back(e);
+                }
+            }
+
+            if (deleted.empty())
+            {
+                v.RenderMessage("（没有已删除的记录）");
+            }
+            else
+            {
+                v.RenderView(deleted);
+            }
+            return 0;
+        }
+
         v.RenderView(note.list());
         return 0;
     }
@@ -234,17 +264,72 @@ int run(const std::vector<std::string>& args, view::View& v)
             v.RenderEntry(*found);
             return 0;
         }
-        v.RenderError("没有这条记录: " + args[2]);
+
+        // 已删除的记录 find 不到，但用户可能只是记错了状态 —— 提示一句。
+        if (note.findAny(args[2]))
+        {
+            v.RenderError("这条记录已删除，可 note undo " + args[2] + " 恢复");
+        }
+        else
+        {
+            v.RenderError("没有这条记录: " + args[2]);
+        }
         return 2;
     }
 
-    // cmd == "rm"
-    if (auto removed = note.remove(args[2]); !removed)
+    if (cmd == "confirm")
     {
-        v.RenderError(removed.error());
+        auto found = note.find(args[2]);
+        if (!found)
+        {
+            v.RenderError("没有这条记录: " + args[2]);
+            return 2;
+        }
+
+        found->confirmed = true;
+
+        if (auto updated = note.update(*found); !updated)
+        {
+            v.RenderError("确认失败: " + updated.error());
+            return 2;
+        }
+
+        v.RenderMessage("已确认 " + args[2]);
+        return 0;
+    }
+
+    if (cmd == "rm")
+    {
+        if (auto removed = note.remove(args[2]); !removed)
+        {
+            v.RenderError(removed.error());
+            return 2;
+        }
+
+        v.RenderMessage("已删除 " + args[2] + "（可 note undo " + args[2] + " 恢复）");
+        return 0;
+    }
+
+    if (cmd == "undo")
+    {
+        if (auto restored = note.restore(args[2]); !restored)
+        {
+            v.RenderError(restored.error());
+            return 2;
+        }
+
+        v.RenderMessage("已恢复 " + args[2]);
+        return 0;
+    }
+
+    // cmd == "purge"
+    if (auto purged = note.purge(args[2]); !purged)
+    {
+        v.RenderError(purged.error());
         return 2;
     }
-    v.RenderMessage("已删除 " + args[2]);
+
+    v.RenderMessage("已彻底删除 " + args[2] + "（不可恢复）");
     return 0;
 }
 

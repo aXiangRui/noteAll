@@ -36,7 +36,10 @@ void ConsoleView::RenderView(const std::vector<core::Entry>& entries)
     {
         // 用 '\n' 而不是 std::endl：std::endl 每次都强制 flush，
         // 逐条打屏时是白费的系统调用。
-        std::cout << toLocalDisplay(e.created_at) << "  " << e.id << "  " << e.raw_text << '\n';
+        //
+        // 墓碑在这里只是一个标记：list 默认看不到它们，只有 list --deleted 会。
+        std::cout << toLocalDisplay(e.created_at) << "  " << e.id << "  " << e.raw_text
+                  << (e.deleted_at ? "   [已删除]" : "") << '\n';
     }
 }
 
@@ -45,6 +48,8 @@ void ConsoleView::RenderEntry(const core::Entry& e)
     std::cout << "id:        " << e.id << '\n';
     std::cout << "记录时间:  " << toLocalDisplay(e.created_at) << '\n';
     std::cout << "kind:      " << core::toString(e.kind) << '\n';
+    std::cout << "来源:      " << core::toString(e.source) << '\n';
+    std::cout << "确认:      " << (e.confirmed ? "是" : "否") << '\n';
     std::cout << "原文:      " << e.raw_text << '\n';
     std::cout << "摘要:      " << (e.summary.empty() ? "（无）" : e.summary) << '\n';
 
@@ -67,6 +72,12 @@ void ConsoleView::RenderEntry(const core::Entry& e)
         std::cout << "（未知）";
     }
     std::cout << '\n';
+
+    if (e.deleted_at)
+    {
+        std::cout << "状态:      已删除（" << toLocalDisplay(*e.deleted_at)
+                  << "），可 note undo " << e.id << " 恢复\n";
+    }
 }
 
 void ConsoleView::RenderTags(const std::vector<std::string>& tags)
