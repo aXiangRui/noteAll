@@ -50,6 +50,15 @@ void ConsoleView::RenderEntry(const core::Entry& e)
     std::cout << "kind:      " << core::toString(e.kind) << '\n';
     std::cout << "来源:      " << core::toString(e.source) << '\n';
     std::cout << "确认:      " << (e.confirmed ? "是" : "否") << '\n';
+
+    // 草稿状态：用户要知道「这条还欠摘要」还是「生成失败了、试了几次」。
+    std::cout << "草稿:      " << core::toString(e.draft_status);
+    if (e.draft_status == core::DraftStatus::Failed)
+    {
+        std::cout << "（已试 " << e.draft_attempts << " 次：" << e.draft_error << "）";
+    }
+    std::cout << '\n';
+
     std::cout << "原文:      " << e.raw_text << '\n';
     std::cout << "摘要:      " << (e.summary.empty() ? "（无）" : e.summary) << '\n';
 

@@ -147,6 +147,10 @@ std::expected<Entry, std::string> Core::add(std::string_view         rawText,
     // tags / kind / confirmed 保持默认（空、Unknown、false）——
     // 那些是 M2 的事。source 默认 Manual，导入路径由调用方改。
 
+    // 新记录一律"欠一份草稿"。谁来补、什么时候补是上层（flow 队列）的事，
+    // core 只负责把状态标出来 —— 顺手标了，省得为这一个字段再写一次盘。
+    e.draft_status = DraftStatus::Pending;
+
     entries_.push_back(e);
     sortNewestFirst(entries_);
     reindexVisible();

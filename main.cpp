@@ -21,11 +21,18 @@
 #include <filesystem>
 #include <format>
 #include <iostream>
+#include <memory>
 #include <optional>
 #include <string>
 #include <vector>
 
 #ifdef _WIN32
+# include "llm/draft.hpp"
+# include "llm/http_chat_client.hpp"
+// NOMINMAX 必须在 windows.h 之前：否则 std::min/std::max 会被 windows.h 的宏吃掉，
+// 报一个完全看不懂的「"::" 右边的非法标记」。
+# define WIN32_LEAN_AND_MEAN
+# define NOMINMAX
 # include <windows.h>
 #endif
 
@@ -177,6 +184,8 @@ void printHelp(std::ostream& os)
           "  note rm <id>            删除（软删除，可 note undo 恢复）\n"
           "  note undo <id>          撤销删除\n"
           "  note purge <id>         彻底删除（不可恢复）\n"
+          "  note draft [--all]     用模型补草稿（summary/tags/kind）；默认只补 2 条\n"
+          "  note draft --id <id>   只补某一条\n"
           "  note parse <文本...>    只试一下时间解析，不写盘（排查「为什么不识别」用）\n"
           "  note help               显示这个帮助\n"
           "\n"
@@ -216,6 +225,57 @@ std::string localText(std::chrono::sys_seconds utc)
     const std::chrono::zoned_time zt{std::chrono::current_zone(), utc};
     return std::format("{:%Y-%m-%d %H:%M}", zt);
 }
+
+#ifdef _WIN32
+
+std::string envOr(char const* name, std::string fallback)
+{
+    if (char const* value = std::getenv(name); value != nullptr && *value != '\0')
+    {
+        return value;
+    }
+    return fallback;
+}
+
+/**
+ * 按环境变量装配一个聊天客户端。
+ *
+ * 配置全部走环境变量，cli 参数里不放 key：
+ *   NOTE_LLM_KEY   必填，DeepSeek 的 API key
+ *   NOTE_LLM_BASE  默认 https://api.deepseek.com
+ *   NOTE_LLM_PATH  默认 /chat/completions
+ *   NOTE_LLM_MODEL 默认 deepseek-chat
+ *
+ * 以后接 ollama 只需要 NOTE_LLM_BASE=http://127.0.0.1:11434
+ * + NOTE_LLM_PATH=/v1/chat/completions（base 是 http 时自动直连，不走系统代理）。
+ */
+std::expected<std::unique_ptr<llm::IChatClient>, std::string> makeChatClient()
+{
+    const std::string key = envOr("NOTE_LLM_KEY", "");
+    if (key.empty())
+    {
+        return std::unexpected(std::string{"没有设置环境变量 NOTE_LLM_KEY（生成草稿要调模型）"});
+    }
+
+    llm::ChatConfig config;
+    config.baseUrl = envOr("NOTE_LLM_BASE", "https://api.deepseek.com");
+    config.path    = envOr("NOTE_LLM_PATH", "/chat/completions");
+    config.model   = envOr("NOTE_LLM_MODEL", "deepseek-chat");
+    config.apiKey  = key;
+
+    if (config.baseUrl.rfind("http://", 0) == 0)
+    {
+        // 本地服务（ollama / llama.cpp）不该被系统代理劫持
+        config.transport.proxyMode = net::ConnectOptions::ProxyMode::Direct;
+    }
+
+    auto created = llm::HttpChatClient::create(std::move(config));
+    if (!created) { return std::unexpected(created.error().message); }
+
+    return std::unique_ptr<llm::IChatClient>(std::move(*created));
+}
+
+#endif
 
 int execute(const std::vector<std::string>& args,
             core::Core&                     note,
@@ -279,7 +339,7 @@ int execute(const std::vector<std::string>& args,
     const bool needsId = (cmd == "show" || cmd == "confirm" || cmd == "rm" || cmd == "undo" ||
                           cmd == "purge");
 
-    if (cmd != "add" && cmd != "list" && !needsId)
+    if (cmd != "add" && cmd != "list" && cmd != "draft" && !needsId)
     {
         v.RenderError("不认识的命令: " + cmd + "（输入 help 看用法）");
         return 1;
@@ -337,8 +397,115 @@ int execute(const std::vector<std::string>& args,
             return fail("记录失败: " + added.error());
         }
 
-        v.RenderMessage("已记录 " + added->id);
+        v.RenderMessage("已记录 " + added->id + "（草稿待补：note draft）");
         return 0;
+    }
+
+    // ---- draft：把欠着的草稿补上 ----
+    //
+    // 默认只补 2 条 / 2.5 秒（机会式）；--all 不限；--id 只补一条。
+    // 没有配 NOTE_LLM_KEY 就直接报错，绝不假装成功。
+    if (cmd == "draft")
+    {
+#ifdef _WIN32
+        bool        all    = false;
+        std::string onlyId;
+
+        for (std::size_t i = 2; i < args.size(); ++i)
+        {
+            if (args[i] == "--all") { all = true; }
+            else if (args[i] == "--id" && i + 1 < args.size()) { onlyId = args[i + 1]; ++i; }
+        }
+
+        auto client = makeChatClient();
+        if (!client) { return fail(client.error()); }
+
+        std::vector<core::Entry> targets;
+        if (!onlyId.empty())
+        {
+            auto one = note.find(onlyId);
+            if (!one) { return fail("没有这条记录: " + onlyId); }
+            targets.push_back(*one);
+        }
+        else
+        {
+            for (auto const& e : note.listAll())
+            {
+                if (e.deleted_at) { continue; }
+                if (e.draft_status == core::DraftStatus::Pending)
+                {
+                    targets.push_back(e);
+                }
+                else if (all && e.draft_status == core::DraftStatus::Failed && e.draft_attempts < 3)
+                {
+                    // 失败的重试，但试满 3 次就不碰了：一条永远失败的记录
+                    // 不该每次启动都烧一次 token。
+                    targets.push_back(e);
+                }
+            }
+        }
+
+        if (targets.empty())
+        {
+            v.RenderMessage("没有需要补草稿的记录");
+            return 0;
+        }
+
+        constexpr std::size_t kDefaultMaxItems = 2;
+        constexpr auto        kDefaultBudget   = std::chrono::milliseconds{2500};
+
+        const std::size_t limit = (all || !onlyId.empty())
+                                      ? targets.size()
+                                      : std::min(targets.size(), kDefaultMaxItems);
+
+        const auto started = std::chrono::steady_clock::now();
+        int        done    = 0;
+        int        failedCount = 0;
+
+        for (std::size_t i = 0; i < limit; ++i)
+        {
+            if (!all && onlyId.empty() && std::chrono::steady_clock::now() - started > kDefaultBudget)
+            {
+                break;
+            }
+
+            core::Entry entry  = targets[i];
+            auto        fields = llm::extractDraft(**client, entry.raw_text);
+
+            std::string error;
+            if (!fields)
+            {
+                entry.draft_attempts += 1;
+                entry.draft_error     = fields.error().message;
+                entry.draft_status    = core::DraftStatus::Failed;
+
+                if (auto updated = note.update(entry); !updated) { return fail("保存失败: " + updated.error()); }
+
+                ++failedCount;
+                v.RenderError("✗ " + entry.id + "：" + fields.error().message);
+                continue;
+            }
+
+            entry.summary      = fields->summary;
+            entry.tags         = fields->tags;
+            entry.kind         = core::kindFromString(fields->kind);
+            entry.draft_status = core::DraftStatus::Done;
+            entry.draft_error.clear();
+
+            if (auto updated = note.update(entry); !updated) { return fail("保存失败: " + updated.error()); }
+
+            ++done;
+            v.RenderMessage("✓ " + entry.id + "  " + entry.summary + "  [" + fields->kind + "]");
+        }
+
+        const std::size_t left = targets.size() - static_cast<std::size_t>(done + failedCount);
+        v.RenderMessage("草稿：成功 " + std::to_string(done) + "，失败 " + std::to_string(failedCount) +
+                        (left > 0 ? "，还剩 " + std::to_string(left) + " 条（note draft --all）" : ""));
+        return failedCount == 0 ? 0 : 2;
+#else
+        v.RenderError("草稿生成目前只支持 Windows（依赖 WinHTTP）");
+        return 1;
+#endif
     }
 
     if (cmd == "list")
@@ -554,7 +721,7 @@ int run(const std::vector<std::string>& args, view::View& v)
     const bool needsId = (cmd == "show" || cmd == "confirm" || cmd == "rm" || cmd == "undo" ||
                           cmd == "purge");
 
-    if (cmd != "add" && cmd != "list" && cmd != "parse" && !needsId)
+    if (cmd != "add" && cmd != "list" && cmd != "parse" && cmd != "draft" && !needsId)
     {
         v.RenderError("不认识的命令: " + cmd + "（输入 note help 看用法）");
         return 1;

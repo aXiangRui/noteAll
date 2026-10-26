@@ -1,0 +1,125 @@
+#include "llm/draft.hpp"
+
+#include <nlohmann/json.hpp>
+
+#include <string>
+#include <utility>
+
+namespace llm
+{
+
+namespace
+{
+
+/**
+ * 提示词。三条约束：只输出 JSON、summary 保留关键信息、tags 别写废话。
+ *
+ * 「tags 不要重复 kind 的含义」是实测加的：给"记得周五前发周报"生成草稿时，
+ * 模型会把「待办」塞进 tags —— 和 kind=todo 完全重复。
+ */
+std::string draftPrompt(std::string const& rawText)
+{
+    return "你是笔记整理助手。把用户的一句话整理成 JSON 对象，只输出 JSON，不要解释、不要代码块。\n"
+           "\n"
+           "字段要求：\n"
+           "- summary：不超过 30 字的中文摘要，保留原文里的关键信息（人名、项目、时间）\n"
+           "- tags：2 到 4 个中文标签，字符串数组；不要重复 kind 的含义（如「待办」「想法」），"
+           "也不要用「工作」「生活」「阅读」这类空泛词\n"
+           "- kind：只能是 event / note / todo / thought 之一\n"
+           "  （event=发生或将要发生的事，note=信息/资料，todo=待办，thought=感受想法）\n"
+           "\n"
+           "用户记录：" + rawText;
+}
+
+std::string trimCopy(std::string text)
+{
+    const auto isSpace = [](char c) { return c == ' ' || c == '\t' || c == '\r' || c == '\n'; };
+
+    std::size_t begin = 0;
+    while (begin < text.size() && isSpace(text[begin])) { ++begin; }
+    std::size_t end = text.size();
+    while (end > begin && isSpace(text[end - 1])) { --end; }
+    return text.substr(begin, end - begin);
+}
+
+/** 模型偶尔会包一层 ```json 围栏，去掉再解析。 */
+std::string stripFence(std::string text)
+{
+    text = trimCopy(std::move(text));
+
+    if (text.rfind("```", 0) == 0)
+    {
+        const auto firstNewline = text.find('\n');
+        if (firstNewline != std::string::npos) { text = text.substr(firstNewline + 1); }
+        if (const auto fenceEnd = text.rfind("```"); fenceEnd != std::string::npos)
+        {
+            text = text.substr(0, fenceEnd);
+        }
+        text = trimCopy(std::move(text));
+    }
+    return text;
+}
+
+DraftError badResponse(std::string message)
+{
+    // 坏响应按可重试处理：换个采样（temperature>0）或重发一次常常就好了。
+    return DraftError{ true, std::move(message) };
+}
+
+}  // namespace
+
+std::expected<DraftFields, DraftError> extractDraft(IChatClient& client, std::string const& rawText)
+{
+    ChatRequest request;
+    request.messages.push_back({ Message::Role::User, draftPrompt(rawText) });
+    request.maxTokens   = 256;
+    request.temperature = 0.2;   // 结构化抽取要稳，不要发散
+
+    auto reply = client.complete(request);
+    if (!reply)
+    {
+        return std::unexpected(DraftError{ reply.error().retryable(), reply.error().message });
+    }
+
+    const std::string jsonText = stripFence(reply->text);
+
+    nlohmann::json parsed;
+    try
+    {
+        parsed = nlohmann::json::parse(jsonText);
+    }
+    catch (std::exception const& ex)
+    {
+        return std::unexpected(badResponse(std::string{"回复不是合法 JSON: "} + ex.what()));
+    }
+
+    if (!parsed.is_object()) { return std::unexpected(badResponse("回复顶层不是 JSON 对象")); }
+
+    DraftFields fields;
+    fields.summary = parsed.value("summary", std::string{});
+    if (fields.summary.empty()) { return std::unexpected(badResponse("summary 缺失或为空")); }
+
+    if (!parsed.contains("tags") || !parsed["tags"].is_array())
+    {
+        return std::unexpected(badResponse("tags 缺失或不是数组"));
+    }
+    for (auto const& tag : parsed["tags"])
+    {
+        if (tag.is_string() && !tag.get<std::string>().empty())
+        {
+            fields.tags.push_back(tag.get<std::string>());
+        }
+    }
+    if (fields.tags.empty()) { return std::unexpected(badResponse("tags 为空")); }
+
+    fields.kind = parsed.value("kind", std::string{});
+    if (fields.kind != "event" && fields.kind != "note" && fields.kind != "todo" &&
+        fields.kind != "thought")
+    {
+        return std::unexpected(badResponse("kind 不在白名单: " + fields.kind));
+    }
+
+    return fields;
+}
+
+}  // namespace llm

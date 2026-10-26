@@ -138,6 +138,7 @@ if(WIN32)
     # 草稿队列与确认流程在 workflow 层，不在这一层
     # -----------------------------------------------------------------------
     add_library(llm
+        src/llm/draft.cpp
         src/llm/http_chat_client.cpp)
 
     target_include_directories(llm PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
@@ -156,6 +157,11 @@ endif()
 # ---------------------------------------------------------------------------
 add_executable(note main.cpp)
 target_link_libraries(note PRIVATE core view parse)
+
+# 草稿功能需要 llm 层（Windows-only）。没它 note 其余功能照常。
+if(TARGET llm)
+    target_link_libraries(note PRIVATE llm)
+endif()
 
 # ---------------------------------------------------------------------------
 # 工具 —— 手动调试用，不进测试

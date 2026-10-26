@@ -72,4 +72,35 @@ namespace core
         // 认不出按"手敲"处理：历史数据没有这个字段，本来也都是手敲的。
         return Source::Manual;
     }
+
+    std::string toString(DraftStatus s)
+    {
+        switch (s)
+        {
+            case DraftStatus::None:    return "none";
+            case DraftStatus::Pending: return "pending";
+            case DraftStatus::Failed:  return "failed";
+            case DraftStatus::Done:    return "done";
+        }
+
+        assert(false && "toString: DraftStatus 有未处理的新值");
+        return "none";
+    }
+
+    DraftStatus draftStatusFromString(std::string_view s)
+    {
+        constexpr std::array<DraftStatus, 4> ALL = {
+            DraftStatus::None, DraftStatus::Pending, DraftStatus::Failed, DraftStatus::Done,
+        };
+
+        for (const DraftStatus status : ALL)
+        {
+            if (toString(status) == s)
+            {
+                return status;
+            }
+        }
+        // 认不出按 None：当作"还没生成过"，最安全（不会误以为已经有草稿）。
+        return DraftStatus::None;
+    }
 }

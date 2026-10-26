@@ -38,6 +38,10 @@ endif()
 if(TARGET llm)
     target_sources(tests_experiments PRIVATE test_chat.cpp)
     target_link_libraries(tests_experiments PRIVATE llm)
+
+    # 草稿抽取只用假客户端，不联网 → 放进主线测试
+    target_sources(tests PRIVATE test_draft.cpp)
+    target_link_libraries(tests PRIVATE llm)
 endif()
 
 add_test(NAME unit COMMAND $<TARGET_FILE:tests>)
