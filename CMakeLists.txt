@@ -3,7 +3,9 @@ cmake_minimum_required(VERSION 3.20)
 project(noteAll
     VERSION 0.1.0
     DESCRIPTION "个人时间轴记事本"
-    LANGUAGES CXX)
+    # C 也得开：EUI-NEO（GUI）底下是 GLFW，那是 C 写的。
+    # 只写 CXX 的话，add_subdirectory(EUI-NEO) 会在 GLFW 那里找不到 C 编译器。
+    LANGUAGES C CXX)
 
 # ---------------------------------------------------------------------------
 # 全局设置
@@ -162,6 +164,52 @@ if(TARGET llm)
         tools/llm_smoke.cpp)
     # third_party：--draft 模式要用 nlohmann 解析模型回复
     target_link_libraries(llm_smoke PRIVATE llm third_party)
+endif()
+
+# ---------------------------------------------------------------------------
+# GUI —— EUI-NEO（可选目标）
+#
+# 只有 third_party/EUI-NEO 存在时才构建：那个目录在 .gitignore 里，
+# 拷贝 UI 框架是手动步骤（见 docs/配置.md）。没有它就只是个提示，不影响别的目标。
+#
+# 集成方式照官方 README：add_subdirectory + eui_neo_configure_app()。
+# 它会帮我们做四件事：加 EUI 自带的 main、链 eui::neo、拷 assets、拷运行时 DLL。
+# ---------------------------------------------------------------------------
+set(EUI_NEO_DIR ${CMAKE_CURRENT_SOURCE_DIR}/third_party/EUI-NEO)
+
+if(EXISTS "${EUI_NEO_DIR}/CMakeLists.txt")
+    # 只要库，不要它自带的几十个示例 app（构建能快一半以上）
+    set(EUI_BUILD_APPS          OFF CACHE BOOL "" FORCE)
+    set(EUI_BUILD_USER_APPS     OFF CACHE BOOL "" FORCE)
+    set(EUI_BUILD_TEST_FIXTURES OFF CACHE BOOL "" FORCE)
+    set(EUI_ENABLE_MODULES      OFF CACHE BOOL "" FORCE)
+    set(EUI_ENABLE_INSTALL      OFF CACHE BOOL "" FORCE)
+
+    # EUI-NEO 是第三方代码，我们的 /W4 对它太吵（几百条警告会把真正的问题淹掉）。
+    # 它自己的目标按 /W3 编 —— 加在后面，MSVC 取最后一个 /W。
+    if(MSVC)
+        add_compile_options(/W3)
+    endif()
+
+    # 生成物放进 build/，别在源码树里拉屎
+    add_subdirectory(${EUI_NEO_DIR} ${CMAKE_BINARY_DIR}/third_party/EUI-NEO)
+
+    if(MSVC)
+        add_compile_options(/W4)   # 我们自己的目标恢复 /W4
+    endif()
+
+    add_executable(note_gui app.cpp)
+    eui_neo_configure_app(note_gui)
+
+    # app.cpp 是我们的代码，但会大量调用 EUI 的模板/内联函数，
+    # 用 /W3 免得被头文件里的警告淹没。
+    if(MSVC)
+        target_compile_options(note_gui PRIVATE /W3)
+    endif()
+
+    message(STATUS "note_gui：已启用（EUI-NEO 来自 ${EUI_NEO_DIR}）")
+else()
+    message(STATUS "note_gui：跳过 —— 没有 third_party/EUI-NEO（见 docs/配置.md）")
 endif()
 
 # ---------------------------------------------------------------------------
