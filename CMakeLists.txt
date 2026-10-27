@@ -85,29 +85,14 @@ add_library(parse
 target_link_libraries(parse PUBLIC core)
 
 # ---------------------------------------------------------------------------
-# flow —— 草稿调度（取任务 / 重试 / 放弃 / 预算 / 陈旧丢弃）
-# 依赖 core；不认识 llm 与 UI：生成器和存储都是构造时注入的
+# ⚠️ flow（草稿调度）与 workflow（编排引擎）已移到 labs/，不再参与主线构建。
+#
+# 原因：它们零用户 —— note 的依赖图是 core + parse + view + llm，草稿流程
+# 是线性的、直接写在 main 里。留一个"没有用户的基础设施"在产品里，会让
+# 架构看起来已经定了，实际没有。详见 labs/README.md 的决策记录。
+#
+# 重新捡起来时：把 labs/<模块>/{include,src} 加回 include 路径再建 target。
 # ---------------------------------------------------------------------------
-add_library(flow
-    src/flow/draft_queue.cpp)
-target_include_directories(flow PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
-target_link_libraries(flow PUBLIC core)
-
-# ---------------------------------------------------------------------------
-# workflow —— 编排引擎（mini-Dify 的数据模型 + 图算法 + 执行器）
-# 依赖：只有 third_party（nlohmann/json 在公共头里暴露 Value）
-# 不认识 core / llm / UI；节点处理器由上层注册（见 workflow/node_registry.hpp）
-# ---------------------------------------------------------------------------
-add_library(workflow
-    src/workflow/graph.cpp
-    src/workflow/node.cpp
-    src/workflow/node_registry.cpp
-    src/workflow/run_context.cpp
-    src/workflow/engine.cpp)
-
-target_include_directories(workflow PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
-# run_context.hpp 直接暴露 nlohmann::json（Value 别名），所以是 PUBLIC。
-target_link_libraries(workflow PUBLIC third_party)
 
 # ---------------------------------------------------------------------------
 # connect —— 网络传输（WinHTTP）
@@ -135,7 +120,7 @@ if(WIN32)
     # -----------------------------------------------------------------------
     # llm —— 聊天协议层（OpenAI 兼容：DeepSeek / ollama / llama.cpp server 同一套）
     # 依赖方向：llm -> net(connect) + third_party；**不认识 core**
-    # 草稿队列与确认流程在 workflow 层，不在这一层
+    # 草稿的"什么时候生成、失败重试几次"在 main 里（线性实现），不在这一层
     # -----------------------------------------------------------------------
     add_library(llm
         src/llm/draft.cpp
@@ -151,9 +136,8 @@ endif()
 # ---------------------------------------------------------------------------
 # 可执行文件
 #
-# note 只链 core / view / parse —— 这就是"记录事情"这条主线。
-# connect（字节收发）、llm（聊天协议）、flow（草稿调度）、workflow（编排引擎）
-# 都还在、照样编译，但**没有接进这个程序**：它们是实验性的，等真要用时再接。
+# note 链 core / view / parse，再加上 llm（生成草稿）。
+# flow / workflow 已移到 labs/（零用户，详见 labs/README.md）。
 # ---------------------------------------------------------------------------
 add_executable(note main.cpp)
 target_link_libraries(note PRIVATE core view parse)
