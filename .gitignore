@@ -48,3 +48,9 @@ docs/*.html
 # ---- dist/ 里的测试运行产物（exe 已按 *.exe 忽略）----
 dist/*.jsonl
 dist/*.lock
+
+# ---- 密钥文件（note.key 之类，绝不入库）----
+*.key
+
+# ---- 外部 UI 框架（自己拷进来的副本，不入库）----
+third_party/EUI-NEO/

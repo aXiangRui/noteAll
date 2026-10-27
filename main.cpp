@@ -20,7 +20,9 @@
 #include <cstdlib>
 #include <filesystem>
 #include <format>
+#include <fstream>
 #include <iostream>
+#include <iterator>
 #include <memory>
 #include <optional>
 #include <string>
@@ -194,7 +196,8 @@ void printHelp(std::ostream& os)
           "      > list\n"
           "      > quit\n"
           "\n"
-          "数据文件：环境变量 NOTE_FILE，默认当前目录的 notes.jsonl\n";
+          "数据文件：环境变量 NOTE_FILE，默认当前目录的 notes.jsonl\n"
+          "模型密钥：环境变量 NOTE_LLM_KEY，或数据文件旁边的 note.key（内容就是 key 本身）\n";
 }
 
 // ---------------------------------------------------------------------------
@@ -238,10 +241,114 @@ std::string envOr(char const* name, std::string fallback)
 }
 
 /**
- * 按环境变量装配一个聊天客户端。
+ * 读一个 .key 文件，返回里面的 key。
  *
- * 配置全部走环境变量，cli 参数里不放 key：
- *   NOTE_LLM_KEY   必填，DeepSeek 的 API key
+ * 约定：整个文件内容就是 key（允许首尾空白、BOM、成对引号）。
+ * 不做 JSON/YAML —— 只有一样东西的文件，不该让人先学一种格式。
+ */
+std::optional<std::string> readKeyFile(std::filesystem::path const& path)
+{
+    std::error_code ec;
+    if (!std::filesystem::is_regular_file(path, ec))
+    {
+        return std::nullopt;
+    }
+
+    std::ifstream in(path, std::ios::binary);
+    if (!in) { return std::nullopt; }
+
+    std::string text((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+
+    // 去掉 UTF-8 BOM（记事本保存的文件常常带）
+    if (text.size() >= 3 && static_cast<unsigned char>(text[0]) == 0xEF &&
+        static_cast<unsigned char>(text[1]) == 0xBB && static_cast<unsigned char>(text[2]) == 0xBF)
+    {
+        text.erase(0, 3);
+    }
+
+    const auto isSpace = [](char c) {
+        return c == ' ' || c == '\t' || c == '\r' || c == '\n' || c == '\0';
+    };
+
+    std::size_t begin = 0;
+    while (begin < text.size() && isSpace(text[begin])) { ++begin; }
+    std::size_t end = text.size();
+    while (end > begin && isSpace(text[end - 1])) { --end; }
+    std::string key = text.substr(begin, end - begin);
+
+    if (key.size() >= 2 && (key.front() == '"' || key.front() == '\'') && key.back() == key.front())
+    {
+        key = key.substr(1, key.size() - 2);
+    }
+
+    if (key.empty()) { return std::nullopt; }
+    return key;
+}
+
+struct ApiKey
+{
+    std::string              value;
+    std::filesystem::path    source;   // 空 = 来自环境变量
+};
+
+/**
+ * key 从哪来：环境变量 > 数据文件旁的 note.key > 用户目录的 note.key。
+ *
+ * 为什么要有文件这条路：环境变量对"双击启动"不好使（临时设的进不了新进程），
+ * 而 setx 又要动注册表。一个 note.key 放在数据旁边，拷机器、拷备份都跟着走。
+ *
+ * 顺序是环境变量优先：临时换 key（试试别的账号、别人的 key）不用改文件。
+ */
+std::expected<ApiKey, std::string> resolveApiKey(std::filesystem::path const& dataFile)
+{
+    if (const std::string fromEnv = envOr("NOTE_LLM_KEY", ""); !fromEnv.empty())
+    {
+        return ApiKey{ fromEnv, {} };
+    }
+
+    std::vector<std::filesystem::path> candidates;
+
+    // 1) 数据文件同目录（最常见的放法）
+    std::filesystem::path dir = dataFile.parent_path();
+    if (dir.empty()) { dir = "."; }
+    candidates.push_back(dir / "note.key");
+
+    // 2) 用户目录（%APPDATA%\noteAll\note.key / ~/.config/noteAll/note.key）
+#ifdef _WIN32
+    if (const char* appData = std::getenv("APPDATA"); appData != nullptr && *appData != '\0')
+    {
+        candidates.push_back(std::filesystem::path{ appData } / "noteAll" / "note.key");
+    }
+#else
+    if (const char* home = std::getenv("HOME"); home != nullptr && *home != '\0')
+    {
+        candidates.push_back(std::filesystem::path{ home } / ".config" / "noteAll" / "note.key");
+    }
+#endif
+
+    for (const auto& candidate : candidates)
+    {
+        if (auto key = readKeyFile(candidate))
+        {
+            return ApiKey{ *key, candidate };
+        }
+    }
+
+    std::string message = "没有找到 API key。按顺序找过：\n";
+    for (const auto& candidate : candidates)
+    {
+        message += "  ✗ " + candidate.string() + "\n";
+    }
+    message += "放法（任选一种）：\n"
+               "  1) 设环境变量 NOTE_LLM_KEY\n"
+               "  2) 在上面任一位置放一个 note.key，内容就是 key 本身\n";
+    return std::unexpected(message);
+}
+
+/**
+ * 装配一个聊天客户端。
+ *
+ *   key           见 resolveApiKey（环境变量 / .key 文件）
  *   NOTE_LLM_BASE  默认 https://api.deepseek.com
  *   NOTE_LLM_PATH  默认 /chat/completions
  *   NOTE_LLM_MODEL 默认 deepseek-chat
@@ -249,19 +356,17 @@ std::string envOr(char const* name, std::string fallback)
  * 以后接 ollama 只需要 NOTE_LLM_BASE=http://127.0.0.1:11434
  * + NOTE_LLM_PATH=/v1/chat/completions（base 是 http 时自动直连，不走系统代理）。
  */
-std::expected<std::unique_ptr<llm::IChatClient>, std::string> makeChatClient()
+std::expected<std::unique_ptr<llm::IChatClient>, std::string> makeChatClient(
+    std::filesystem::path const& dataFile)
 {
-    const std::string key = envOr("NOTE_LLM_KEY", "");
-    if (key.empty())
-    {
-        return std::unexpected(std::string{"没有设置环境变量 NOTE_LLM_KEY（生成草稿要调模型）"});
-    }
+    auto key = resolveApiKey(dataFile);
+    if (!key) { return std::unexpected(key.error()); }
 
     llm::ChatConfig config;
     config.baseUrl = envOr("NOTE_LLM_BASE", "https://api.deepseek.com");
     config.path    = envOr("NOTE_LLM_PATH", "/chat/completions");
     config.model   = envOr("NOTE_LLM_MODEL", "deepseek-chat");
-    config.apiKey  = key;
+    config.apiKey  = key->value;
 
     if (config.baseUrl.rfind("http://", 0) == 0)
     {
@@ -417,7 +522,7 @@ int execute(const std::vector<std::string>& args,
             else if (args[i] == "--id" && i + 1 < args.size()) { onlyId = args[i + 1]; ++i; }
         }
 
-        auto client = makeChatClient();
+        auto client = makeChatClient(dataFile);
         if (!client) { return fail(client.error()); }
 
         std::vector<core::Entry> targets;
