@@ -171,7 +171,8 @@ void printHelp(std::ostream& os)
           "  note rm <id>            删除（软删除，可 note undo 恢复）\n"
           "  note undo <id>          撤销删除\n"
           "  note purge <id>         彻底删除（不可恢复）\n"
-          "  note draft [--all]     用模型补草稿（summary/tags/kind）；默认只补 2 条\n"
+          "  note draft [--all]     用模型补草稿（title/summary/tags/kind）；默认只补 2 条\n"
+          "  note draft --force     连已完成的也重新生成（改了提示词后用）\n"
           "  note draft --id <id>   只补某一条\n"
           "  note parse <文本...>    只试一下时间解析，不写盘（排查「为什么不识别」用）\n"
           "  note help               显示这个帮助\n"
@@ -483,11 +484,13 @@ int execute(const std::vector<std::string>& args,
     {
 #ifdef _WIN32
         bool        all    = false;
+        bool        force  = false;
         std::string onlyId;
 
         for (std::size_t i = 2; i < args.size(); ++i)
         {
             if (args[i] == "--all") { all = true; }
+            else if (args[i] == "--force") { force = true; }
             else if (args[i] == "--id" && i + 1 < args.size()) { onlyId = args[i + 1]; ++i; }
         }
 
@@ -514,6 +517,12 @@ int execute(const std::vector<std::string>& args,
                 {
                     // 失败的重试，但试满 3 次就不碰了：一条永远失败的记录
                     // 不该每次启动都烧一次 token。
+                    targets.push_back(e);
+                }
+                else if (force && e.draft_status == core::DraftStatus::Done)
+                {
+                    // 改了提示词（比如"标题不要写时间"）之后要重生成旧的：
+                    // 只认 --force，避免平时重复烧 token。
                     targets.push_back(e);
                 }
             }
