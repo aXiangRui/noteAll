@@ -167,8 +167,49 @@ std::string timeLabel(const core::Entry& entry, const std::chrono::time_zone& tz
     return start + "–" + formatUtc(*entry.occurred->end);
 }
 
-std::string displayTitle(const core::Entry& entry)
+namespace
 {
+
+int minutesOfLocalDay(std::chrono::sys_seconds utc, const std::chrono::time_zone& tz)
+{
+    const std::chrono::zoned_time zt{ &tz, utc };
+    const auto                    local = zt.get_local_time();
+    const auto                    day   = std::chrono::floor<std::chrono::days>(local);
+    return static_cast<int>(std::chrono::duration_cast<std::chrono::minutes>(local - day).count());
+}
+
+}  // namespace
+
+DayPlacement placeEntry(const core::Entry& entry, const std::chrono::time_zone& tz)
+{
+    DayPlacement placement;
+
+    if (!entry.occurred)
+    {
+        return placement;   // hasTime = false：时间没识别出来
+    }
+
+    placement.hasTime      = true;
+    placement.startMinutes = minutesOfLocalDay(entry.occurred->start, tz);
+
+    if (!entry.occurred->end)
+    {
+        // 只有时刻，没有结束。**不假设时长**：endMinutes 保持空，
+        // 由 UI 决定用一个"最小可见高度"画成点（高度不代表时长）。
+        placement.allDay = (placement.startMinutes == 0);
+        return placement;
+    }
+
+    const int endMinutes = minutesOfLocalDay(*entry.occurred->end, tz);
+
+    // 结束早于开始 = 跨到次日（比如 23:00–01:00），当成 24:00 收口
+    placement.endMinutes = (endMinutes < placement.startMinutes) ? 1440 : endMinutes;
+    placement.allDay     = (placement.startMinutes == 0 && *placement.endMinutes == 1440);
+
+    return placement;
+}
+
+std::string displayTitle(const core::Entry& entry){
     if (!entry.summary.empty())
     {
         return entry.summary;

@@ -54,6 +54,26 @@ std::string monthDayLabel(std::chrono::year_month_day d); // 10/27
 /** 时间标签："15:00" / "15:00–17:00" / "全天"（只有日期没有时刻）。 */
 std::string timeLabel(const core::Entry& entry, const std::chrono::time_zone& tz);
 
+// ---------------------------------------------------------------------------
+// 24 小时时间轴：一条记录在当天的"分钟位置"
+//
+// 周视图的列不再是等高的卡片堆，而是一条 00:00→24:00 的刻度尺：
+// 卡片的**上边**是开始时间、**下边**是结束时间。
+//
+// 关键约定（用户明确要求）：**没有结束时间就绝不假设 1 小时**。
+// 那种记录只有"时刻"，没有"跨度"——UI 侧用最小可见高度把它画成一个点，
+// 但高度不代表时长；跨度是 0。
+// ---------------------------------------------------------------------------
+struct DayPlacement
+{
+    bool               hasTime = false;      // 有 occurred 且带具体时刻
+    bool               allDay = false;       // 只有日期（本地 00:00 起、没有 end）
+    int                startMinutes = 0;     // 0..1439（本地时间）
+    std::optional<int> endMinutes;           // 0..1440；跨到次日就是 1440
+};
+
+DayPlacement placeEntry(const core::Entry& entry, const std::chrono::time_zone& tz);
+
 /** 卡片上显示的文字：有摘要用摘要，没有就退回原文。 */
 std::string displayTitle(const core::Entry& entry);
 

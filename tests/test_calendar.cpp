@@ -146,8 +146,7 @@ TEST_CASE("timeLabel：时间点 / 时段 / 全天 / 未识别")
     CHECK(app::timeLabel(unknown, shanghai()) == "时间未识别");
 }
 
-TEST_CASE("displayTitle / weekdayLabel / weekRangeLabel")
-{
+TEST_CASE("displayTitle / weekdayLabel / weekRangeLabel"){
     auto entry    = makeEntry("原文很长很长", sys_days{ ymd(2026, 10, 27) });
     entry.summary = "摘要";
     CHECK(app::displayTitle(entry) == "摘要");
@@ -160,4 +159,61 @@ TEST_CASE("displayTitle / weekdayLabel / weekRangeLabel")
 
     CHECK(app::weekRangeLabel(ymd(2026, 10, 26)) == "2026年10月26日 – 11月1日");
     CHECK(app::weekRangeLabel(ymd(2026, 12, 28)) == "2026年12月28日 – 1月3日");
+}
+
+// ---------------------------------------------------------------------------
+// 24 小时时间轴：一条记录在当天的分钟位置
+//
+// 用户的核心要求：**没有结束时间就不许假设 1 小时**。
+// 所以 placeEntry 对"只有时刻"的记录 endMinutes 必须是空。
+// ---------------------------------------------------------------------------
+
+TEST_CASE("placeEntry：只有开始时间 → 不假设时长")
+{
+    // 上海 15:00 = UTC 07:00
+    auto entry = makeEntry("点", sys_days{ ymd(2026, 10, 27) } + hours{ 7 });
+
+    const auto p = app::placeEntry(entry, shanghai());
+    CHECK(p.hasTime);
+    CHECK(p.startMinutes == 15 * 60);
+    CHECK_FALSE(p.endMinutes.has_value());   // ★ 不假设 1 小时
+    CHECK_FALSE(p.allDay);
+}
+
+TEST_CASE("placeEntry：写了结束时间 → 按时长给上下边")
+{
+    auto entry = makeEntry("段", sys_days{ ymd(2026, 10, 27) } + hours{ 7 });   // 15:00
+    entry.occurred->end = sys_days{ ymd(2026, 10, 27) } + hours{ 9 };          // 17:00
+
+    const auto p = app::placeEntry(entry, shanghai());
+    CHECK(p.startMinutes == 15 * 60);
+    REQUIRE(p.endMinutes.has_value());
+    CHECK(*p.endMinutes == 17 * 60);
+    CHECK_FALSE(p.allDay);
+}
+
+TEST_CASE("placeEntry：跨天（23:00–01:00）收在 24:00")
+{
+    auto entry = makeEntry("跨", sys_days{ ymd(2026, 10, 27) } + hours{ 15 });   // 上海 23:00
+    entry.occurred->end = sys_days{ ymd(2026, 10, 27) } + hours{ 17 };          // 上海次日 01:00
+
+    const auto p = app::placeEntry(entry, shanghai());
+    CHECK(p.startMinutes == 23 * 60);
+    REQUIRE(p.endMinutes.has_value());
+    CHECK(*p.endMinutes == 1440);
+}
+
+TEST_CASE("placeEntry：只有日期 = 全天；没有 occurred = 未排时间")
+{
+    // 上海 10-27 00:00 = UTC 10-26 16:00
+    auto allDay = makeEntry("全天", sys_days{ ymd(2026, 10, 26) } + hours{ 16 });
+    const auto dayPlacement = app::placeEntry(allDay, shanghai());
+    CHECK(dayPlacement.hasTime);
+    CHECK(dayPlacement.allDay);
+    CHECK(dayPlacement.startMinutes == 0);
+    CHECK_FALSE(dayPlacement.endMinutes.has_value());
+
+    auto unknown = makeEntry("没时间", std::nullopt);
+    const auto unplaced = app::placeEntry(unknown, shanghai());
+    CHECK_FALSE(unplaced.hasTime);
 }

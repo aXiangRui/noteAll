@@ -1,14 +1,19 @@
-// 周视图模块：一周七列，每天一条任务时间线。
+// 周视图模块：一周七列，每列是一条严格的 24 小时时间轴。
 //
-// 这个文件只管"画"。数据摊平是 app::buildWeek（纯函数、有单测），
-// 读盘是 app::reloadData。想改布局、配色、卡片密度，只改这里。
+// 和上一版的区别：
+//   * 不再是"等高卡片堆"，而是 00:00 → 24:00 的真实刻度尺；
+//   * 卡片**上边 = 开始时间，下边 = 结束时间**；
+//   * 没有结束时间就**绝不假设 1 小时** —— 那种记录只画一个最小高度的"点"，
+//     高度只是为了看得见，不代表时长。
 //
-// 字号一律从 metrics 取（18–28）。改字号时**必须**同步改这里的高度常量，
-// 否则文字会互相压住 —— 所以下面每一项高度都是用字号算出来的。
+// 布局备忘（字号 18–28，字都从 metrics 取）：
+//   左侧 58px 刻度槽（00:00 / 06:00 / 12:00 / 18:00 / 24:00）
+//   七列等宽；列内 24h 轴高度 = 列高 - 列头 - 底部"未排时间"条
 
 #include "pages.hpp"
 
 #include <algorithm>
+#include <cstdio>
 #include <string>
 #include <vector>
 
@@ -20,23 +25,24 @@ namespace
 
 using namespace metrics;
 
-constexpr float kChipHeight = 40.0f;                       // 18px 字 + 上下留白
+constexpr float kChipHeight = 40.0f;
 constexpr float kChipLabelTop = 9.0f;
 constexpr float kTopBarHeight = 58.0f;
 constexpr float kColumnGap = 8.0f;
-constexpr float kColumnPad = 12.0f;
-constexpr float kLineX = 16.0f;
-constexpr float kItemGap = 10.0f;
+constexpr float kColumnPad = 10.0f;
+constexpr float kHeaderHeight = 62.0f;
+constexpr float kGutterWidth = 58.0f;
+constexpr float kGutterGap = 6.0f;
+constexpr float kUnplacedHeight = 54.0f;
 
-// 列头：周几（20）+ 日期（18）
-constexpr float kHeaderHeight = 66.0f;
+// 卡片最小高度：只为了让 18px 时刻 + 20px 标题放得下。
+// 它**不是**默认时长 —— 时长永远来自 end - start。
+constexpr float kMinCardHeight = 56.0f;
+constexpr float kCardGapNudge = 4.0f;
+constexpr float kMinutesPerDay = 1440.0f;
 
-// 卡片：时间（18，行高 24）+ 标题（20，最多两行 × 26）
-constexpr float kItemHeight = 92.0f;   // 时间 24 + 标题两行 52 + 上下留白
-
-// 小胶囊按钮：配色完全由我们控制（不用 components::button 的深色默认）
 void composeChip(eui::Ui& ui, const std::string& id, float x, float y, float width,
-                 const std::string& label, bool emphasized, std::function<void()> onClick)
+                 const std::string& label, std::function<void()> onClick)
 {
     ui.stack(id)
         .position(x, y)
@@ -47,7 +53,7 @@ void composeChip(eui::Ui& ui, const std::string& id, float x, float y, float wid
                 .position(0.0f, 0.0f)
                 .size(width, kChipHeight)
                 .radius(9.0f)
-                .color(emphasized ? colors::kAccent : colors::kColumnBg)
+                .color(colors::kColumnBg)
                 .border(1.0f, colors::kCardBorder)
                 .build();
 
@@ -67,41 +73,64 @@ void composeTopBar(eui::Ui& ui, AppState& state, const PageRect& area)
 {
     const float y = area.y + 4.0f;
 
-    composeChip(ui, "nav.prev", area.x, y, 108.0f, "‹ 上一周", false, [&state] {
+    composeChip(ui, "nav.prev", area.x, y, 108.0f, "‹ 上一周", [&state] {
         state.weekStart = std::chrono::year_month_day{
             std::chrono::sys_days{ state.weekStart } - std::chrono::days{ 7 } };
     });
-
-    composeChip(ui, "nav.today", area.x + 116.0f, y, 88.0f, "本周", false, [&state] {
+    composeChip(ui, "nav.today", area.x + 116.0f, y, 88.0f, "本周", [&state] {
         state.weekStart = mondayOf(todayLocal());
     });
-
-    composeChip(ui, "nav.next", area.x + 212.0f, y, 108.0f, "下一周 ›", false, [&state] {
+    composeChip(ui, "nav.next", area.x + 212.0f, y, 108.0f, "下一周 ›", [&state] {
         state.weekStart = std::chrono::year_month_day{
             std::chrono::sys_days{ state.weekStart } + std::chrono::days{ 7 } };
     });
-
-    composeChip(ui, "nav.reload", area.x + area.width - 88.0f, y, 88.0f, "刷新", false, [&state] {
+    composeChip(ui, "nav.reload", area.x + area.width - 88.0f, y, 88.0f, "刷新", [&state] {
         reloadData(state);
     });
 
     ui.text("week.range")
         .position(area.x + 336.0f, y + 7.0f)
-        .size(std::max(200.0f, area.width - 336.0f - 100.0f), kLineCaption)
+        .size(std::max(160.0f, area.width - 336.0f - 100.0f), kLineCaption)
         .text(app::weekRangeLabel(state.weekStart))
         .fontSize(kFontRange)
         .color(colors::kText)
         .build();
 }
 
+/** "HH:MM" —— 刻度与卡片里的时刻都用它。 */
+std::string clockLabel(int minutes)
+{
+    char buffer[8];
+    std::snprintf(buffer, sizeof(buffer), "%02d:%02d", minutes / 60, minutes % 60);
+    return buffer;
+}
+
+void composeGutter(eui::Ui& ui, const PageRect& area, float axisTop, float axisHeight)
+{
+    // 每 6 小时一个刻度（0 / 6 / 12 / 18 / 24）
+    for (int hour = 0; hour <= 24; hour += 6)
+    {
+        const float y = axisTop + axisHeight * static_cast<float>(hour * 60) / kMinutesPerDay;
+
+        ui.text("gutter." + std::to_string(hour))
+            .position(area.x, y - kLineCaption * 0.5f)
+            .size(kGutterWidth, kLineCaption)
+            .text(clockLabel(hour * 60))
+            .fontSize(kFontCaption)
+            .color(colors::kMuted)
+            .build();
+    }
+}
+
 void composeDayColumn(eui::Ui& ui, const DayColumn& column, int index, const PageRect& area,
-                      float columnWidth)
+                      float columnWidth, float axisTop, float axisHeight)
 {
     const std::string id = "day" + std::to_string(index);
-    const bool isToday = column.day == todayLocal();
+    const bool        isToday = column.day == todayLocal();
+    const float       minutesPerPixel = axisHeight / kMinutesPerDay;
 
     ui.stack(id)
-        .position(area.x + static_cast<float>(index) * (columnWidth + kColumnGap), area.y)
+        .position(area.x, area.y)
         .size(columnWidth, area.height)
         .clip()
         .content([&] {
@@ -114,7 +143,7 @@ void composeDayColumn(eui::Ui& ui, const DayColumn& column, int index, const Pag
                 .build();
 
             ui.text(id + ".weekday")
-                .position(kColumnPad, 10.0f)
+                .position(kColumnPad, 8.0f)
                 .size(columnWidth - kColumnPad * 2.0f, kLineBody)
                 .text(app::weekdayLabel(std::chrono::weekday{ std::chrono::sys_days{ column.day } }))
                 .fontSize(kFontBody)
@@ -122,70 +151,155 @@ void composeDayColumn(eui::Ui& ui, const DayColumn& column, int index, const Pag
                 .build();
 
             ui.text(id + ".date")
-                .position(kColumnPad, 36.0f)
+                .position(kColumnPad, 34.0f)
                 .size(columnWidth - kColumnPad * 2.0f, kLineCaption)
                 .text(app::monthDayLabel(column.day))
                 .fontSize(kFontCaption)
                 .color(colors::kMuted)
                 .build();
 
-            // 竖线：把一天的节点串成一条时间线
-            if (!column.entries.empty())
+            // ---- 24h 刻度线（每 3 小时一条淡线）----
+            for (int hour = 0; hour <= 21; hour += 3)
             {
-                ui.rect(id + ".line")
-                    .position(kLineX + 3.0f, kHeaderHeight + 6.0f)
-                    .size(2.0f, std::max(1.0f, area.height - kHeaderHeight - 16.0f))
-                    .radius(1.0f)
+                const float lineY =
+                    kHeaderHeight + axisHeight * static_cast<float>(hour * 60) / kMinutesPerDay;
+
+                ui.rect(id + ".grid." + std::to_string(hour))
+                    .position(0.0f, lineY)
+                    .size(columnWidth, 1.0f)
                     .color(colors::kLine)
                     .build();
             }
 
-            float y = kHeaderHeight;
+            // ---- 卡片：上边 = 开始，下边 = 结束 ----
+            float lastBottom = kHeaderHeight;
+
             for (const core::Entry* entry : column.entries)
             {
-                if (y + kItemHeight > area.height)
+                const DayPlacement placement = app::placeEntry(*entry, *std::chrono::current_zone());
+                if (!placement.hasTime)
                 {
-                    break;   // 放不下先截断（列内滚动留给下一步）
+                    continue;   // 时间没识别的画在底部"未排"条里
                 }
+
+                const float startY =
+                    kHeaderHeight + static_cast<float>(placement.startMinutes) * minutesPerPixel;
+
+                // 有结束时间 → 高度按时长算；没有 → 最小可见高度（不代表 1 小时）
+                float height = kMinCardHeight;
+                if (placement.endMinutes)
+                {
+                    const float span =
+                        static_cast<float>(*placement.endMinutes - placement.startMinutes);
+                    height = std::max(kMinCardHeight, span * minutesPerPixel);
+                }
+
+                // 轻微重叠处理：按开始时间排序后若压到上一张，就往下推一点。
+                // 位置仍以时间为主；挤在一起时宁可略偏，也不要叠到看不清。
+                float y = startY;
+                if (y < lastBottom + kCardGapNudge)
+                {
+                    y = lastBottom + kCardGapNudge;
+                }
+                if (y + height > kHeaderHeight + axisHeight)
+                {
+                    break;   // 超出轴底先截断（列内滚动留给下一步）
+                }
+                lastBottom = y + height;
 
                 const std::string itemId = id + "." + entry->id;
 
-                // 任务卡：淡蓝底 + 淡蓝描边
                 ui.rect(itemId + ".card")
-                    .position(4.0f, y)
-                    .size(columnWidth - 8.0f, kItemHeight)
+                    .position(6.0f, y)
+                    .size(columnWidth - 12.0f, height)
                     .radius(10.0f)
                     .color(colors::kCardBg)
                     .border(1.0f, colors::kCardBorder)
                     .build();
 
-                // 节点圆点（类型色）
                 ui.rect(itemId + ".dot")
-                    .position(kLineX - 2.0f, y + 12.0f)
-                    .size(10.0f, 10.0f)
-                    .radius(5.0f)
+                    .position(10.0f, y + 10.0f)
+                    .size(8.0f, 8.0f)
+                    .radius(4.0f)
                     .color(app::kindColor(entry->kind))
                     .build();
 
-                ui.text(itemId + ".time")
-                    .position(kColumnPad + 16.0f, y + 6.0f)
-                    .size(columnWidth - kColumnPad - 24.0f, kLineCaption)
-                    .text(app::timeLabel(*entry, *std::chrono::current_zone()))
+                // 上边：开始时间
+                ui.text(itemId + ".start")
+                    .position(24.0f, y + 4.0f)
+                    .size(columnWidth - 34.0f, kLineCaption)
+                    .text(clockLabel(placement.startMinutes))
                     .fontSize(kFontCaption)
                     .color(colors::kMuted)
                     .build();
 
+                // 下边：结束时间（只有真的写了结束时间才画）
+                if (placement.endMinutes)
+                {
+                    ui.text(itemId + ".end")
+                        .position(24.0f, y + height - kLineCaption - 2.0f)
+                        .size(columnWidth - 34.0f, kLineCaption)
+                        .text(clockLabel(*placement.endMinutes))
+                        .fontSize(kFontCaption)
+                        .color(colors::kMuted)
+                        .build();
+                }
+
+                // 中间：标题
+                const float titleTop = y + kLineCaption + 4.0f;
+                const float reserved = placement.endMinutes ? kLineCaption + 2.0f : 2.0f;
+                const float titleHeight = std::max(kLineBody, height - kLineCaption - 6.0f - reserved);
+
                 ui.text(itemId + ".title")
-                    .position(kColumnPad + 16.0f, y + 32.0f)
-                    .size(columnWidth - kColumnPad - 24.0f, kItemHeight - 40.0f)
+                    .position(24.0f, titleTop)
+                    .size(columnWidth - 34.0f, titleHeight)
                     .text(app::displayTitle(*entry))
                     .fontSize(kFontBody)
                     .lineHeight(kLineBody)
                     .wrap(true)
                     .color(colors::kText)
                     .build();
+            }
 
-                y += kItemHeight + kItemGap;
+            // ---- 底部：时间没识别的记录（不占 24h 轴）----
+            std::size_t unplaced = 0;
+            std::string firstUnplaced;
+            for (const core::Entry* entry : column.entries)
+            {
+                if (!app::placeEntry(*entry, *std::chrono::current_zone()).hasTime)
+                {
+                    if (unplaced == 0) { firstUnplaced = app::displayTitle(*entry); }
+                    ++unplaced;
+                }
+            }
+
+            if (unplaced > 0)
+            {
+                const float stripY = kHeaderHeight + axisHeight + 4.0f;
+
+                ui.rect(id + ".unplaced.bg")
+                    .position(6.0f, stripY)
+                    .size(columnWidth - 12.0f, kUnplacedHeight - 8.0f)
+                    .radius(9.0f)
+                    .color(colors::kCardBg)
+                    .border(1.0f, colors::kCardBorder)
+                    .build();
+
+                ui.text(id + ".unplaced.label")
+                    .position(14.0f, stripY + 2.0f)
+                    .size(columnWidth - 22.0f, kLineCaption)
+                    .text("未排时间 " + std::to_string(unplaced) + " 条")
+                    .fontSize(kFontCaption)
+                    .color(colors::kMuted)
+                    .build();
+
+                ui.text(id + ".unplaced.first")
+                    .position(14.0f, stripY + 2.0f + kLineCaption)
+                    .size(columnWidth - 22.0f, kLineCaption)
+                    .text(firstUnplaced)
+                    .fontSize(kFontCaption)
+                    .color(colors::kText)
+                    .build();
             }
 
             if (column.entries.empty())
@@ -208,19 +322,46 @@ void composeWeekPage(eui::Ui& ui, AppState& state, const PageRect& area)
 {
     composeTopBar(ui, state, area);
 
-    const PageRect grid{
-        area.x,
-        area.y + kTopBarHeight,
-        area.width,
-        std::max(140.0f, area.height - kTopBarHeight),
-    };
+    const float gridTop    = area.y + kTopBarHeight;
+    const float gridHeight = std::max(160.0f, area.height - kTopBarHeight);
+    const float axisTop    = gridTop + kHeaderHeight;
 
-    const float columnWidth = (grid.width - kColumnGap * 6.0f) / 7.0f;
-    const auto  columns = app::buildWeek(state.entries, state.weekStart, *std::chrono::current_zone());
+    const auto columns = app::buildWeek(state.entries, state.weekStart, *std::chrono::current_zone());
+
+    // 只要有一列存在"未排时间"的记录，就在轴下面留一条 54px 的条
+    bool anyUnplaced = false;
+    for (const auto& column : columns)
+    {
+        for (const core::Entry* entry : column.entries)
+        {
+            if (!app::placeEntry(*entry, *std::chrono::current_zone()).hasTime)
+            {
+                anyUnplaced = true;
+                break;
+            }
+        }
+    }
+
+    const float axisHeight =
+        std::max(80.0f, gridHeight - kHeaderHeight - 8.0f - (anyUnplaced ? kUnplacedHeight : 0.0f));
+
+    composeGutter(ui, PageRect{ area.x, gridTop, kGutterWidth, gridHeight }, axisTop, axisHeight);
+
+    const float columnsX     = area.x + kGutterWidth + kGutterGap;
+    const float columnsWidth = std::max(280.0f, area.width - kGutterWidth - kGutterGap);
+    const float columnWidth  = (columnsWidth - kColumnGap * 6.0f) / 7.0f;
 
     for (std::size_t i = 0; i < columns.size(); ++i)
     {
-        composeDayColumn(ui, columns[i], static_cast<int>(i), grid, columnWidth);
+        const PageRect columnArea{
+            columnsX + static_cast<float>(i) * (columnWidth + kColumnGap),
+            gridTop,
+            columnWidth,
+            gridHeight,
+        };
+
+        composeDayColumn(ui, columns[i], static_cast<int>(i), columnArea, columnWidth, axisTop,
+                         axisHeight);
     }
 }
 
