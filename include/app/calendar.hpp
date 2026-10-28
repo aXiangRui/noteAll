@@ -77,6 +77,14 @@ DayPlacement placeEntry(const core::Entry& entry, const std::chrono::time_zone& 
 /** 卡片上显示的文字：有摘要用摘要，没有就退回原文。 */
 std::string displayTitle(const core::Entry& entry);
 
+/**
+ * 时间轴卡片上只放"标题"：有摘要用摘要；没有摘要就把原文截到 maxCodePoints 个字。
+ *
+ * 为什么必须截：卡片窄（一列约 150px），原文可能是一整段话。
+ * 完整内容放在详情面板里（点卡片才出现）——列表要"扫一眼"，详情才要"读全文"。
+ */
+std::string cardTitle(const core::Entry& entry, std::size_t maxCodePoints = 14);
+
 /** 日期区间标签："2026年10月26日 – 11月1日"。 */
 std::string weekRangeLabel(std::chrono::year_month_day weekStart);
 

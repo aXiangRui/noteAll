@@ -122,8 +122,8 @@ void composeGutter(eui::Ui& ui, const PageRect& area, float axisTop, float axisH
     }
 }
 
-void composeDayColumn(eui::Ui& ui, const DayColumn& column, int index, const PageRect& area,
-                      float columnWidth, float axisTop, float axisHeight)
+void composeDayColumn(eui::Ui& ui, AppState& state, const DayColumn& column, int index,
+                      const PageRect& area, float columnWidth, float axisTop, float axisHeight)
 {
     const std::string id = "day" + std::to_string(index);
     const bool        isToday = column.day == todayLocal();
@@ -209,55 +209,64 @@ void composeDayColumn(eui::Ui& ui, const DayColumn& column, int index, const Pag
 
                 const std::string itemId = id + "." + entry->id;
 
-                ui.rect(itemId + ".card")
+                // 整张卡片是一个可点区域：外层 stack 收口，onClick 挂在它身上。
+                // 卡片里**只放标题**（有摘要用摘要，没有就截断原文）；
+                // 完整内容点开才看 —— 列表要能扫，详情才要读。
+                ui.stack(itemId)
                     .position(6.0f, y)
                     .size(columnWidth - 12.0f, height)
-                    .radius(10.0f)
-                    .color(colors::kCardBg)
-                    .border(1.0f, colors::kCardBorder)
-                    .build();
+                    .onClick([&state, entryId = entry->id] { state.selectedId = entryId; })
+                    .content([&] {
+                        ui.rect(itemId + ".card")
+                            .position(0.0f, 0.0f)
+                            .size(columnWidth - 12.0f, height)
+                            .radius(10.0f)
+                            .color(colors::kCardBg)
+                            .border(1.0f, colors::kCardBorder)
+                            .build();
 
-                ui.rect(itemId + ".dot")
-                    .position(10.0f, y + 10.0f)
-                    .size(8.0f, 8.0f)
-                    .radius(4.0f)
-                    .color(app::kindColor(entry->kind))
-                    .build();
+                        ui.rect(itemId + ".dot")
+                            .position(6.0f, 8.0f)
+                            .size(8.0f, 8.0f)
+                            .radius(4.0f)
+                            .color(app::kindColor(entry->kind))
+                            .build();
 
-                // 上边：开始时间
-                ui.text(itemId + ".start")
-                    .position(24.0f, y + 4.0f)
-                    .size(columnWidth - 34.0f, kLineCaption)
-                    .text(clockLabel(placement.startMinutes))
-                    .fontSize(kFontCaption)
-                    .color(colors::kMuted)
-                    .build();
+                        // 上边：开始时间
+                        ui.text(itemId + ".start")
+                            .position(20.0f, 2.0f)
+                            .size(columnWidth - 34.0f, kLineCaption)
+                            .text(clockLabel(placement.startMinutes))
+                            .fontSize(kFontCaption)
+                            .color(colors::kMuted)
+                            .build();
 
-                // 下边：结束时间（只有真的写了结束时间才画）
-                if (placement.endMinutes)
-                {
-                    ui.text(itemId + ".end")
-                        .position(24.0f, y + height - kLineCaption - 2.0f)
-                        .size(columnWidth - 34.0f, kLineCaption)
-                        .text(clockLabel(*placement.endMinutes))
-                        .fontSize(kFontCaption)
-                        .color(colors::kMuted)
-                        .build();
-                }
+                        // 下边：结束时间（只有真的写了结束时间才画）
+                        if (placement.endMinutes)
+                        {
+                            ui.text(itemId + ".end")
+                                .position(20.0f, height - kLineCaption - 2.0f)
+                                .size(columnWidth - 34.0f, kLineCaption)
+                                .text(clockLabel(*placement.endMinutes))
+                                .fontSize(kFontCaption)
+                                .color(colors::kMuted)
+                                .build();
+                        }
 
-                // 中间：标题
-                const float titleTop = y + kLineCaption + 4.0f;
-                const float reserved = placement.endMinutes ? kLineCaption + 2.0f : 2.0f;
-                const float titleHeight = std::max(kLineBody, height - kLineCaption - 6.0f - reserved);
+                        // 中间：标题（只有标题）
+                        const float reserved   = placement.endMinutes ? kLineCaption + 2.0f : 2.0f;
+                        const float titleHeight = std::max(kLineBody, height - kLineCaption - 6.0f - reserved);
 
-                ui.text(itemId + ".title")
-                    .position(24.0f, titleTop)
-                    .size(columnWidth - 34.0f, titleHeight)
-                    .text(app::displayTitle(*entry))
-                    .fontSize(kFontBody)
-                    .lineHeight(kLineBody)
-                    .wrap(true)
-                    .color(colors::kText)
+                        ui.text(itemId + ".title")
+                            .position(20.0f, kLineCaption + 4.0f)
+                            .size(columnWidth - 34.0f, titleHeight)
+                            .text(app::cardTitle(*entry))
+                            .fontSize(kFontBody)
+                            .lineHeight(kLineBody)
+                            .wrap(true)
+                            .color(colors::kText)
+                            .build();
+                    })
                     .build();
             }
 
@@ -360,7 +369,7 @@ void composeWeekPage(eui::Ui& ui, AppState& state, const PageRect& area)
             gridHeight,
         };
 
-        composeDayColumn(ui, columns[i], static_cast<int>(i), columnArea, columnWidth, axisTop,
+        composeDayColumn(ui, state, columns[i], static_cast<int>(i), columnArea, columnWidth, axisTop,
                          axisHeight);
     }
 }

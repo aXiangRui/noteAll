@@ -216,7 +216,8 @@ if(EXISTS "${EUI_NEO_DIR}/CMakeLists.txt")
         app.cpp
         ui/state.cpp
         ui/week_page.cpp
-        ui/settings_page.cpp)
+        ui/settings_page.cpp
+        ui/detail_panel.cpp)
     # ui/：模块的 compose 函数与共享状态（app_state.hpp / pages.hpp）
     target_include_directories(note_gui PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/ui)
     # app 库：dataPath() + 周视图数据准备（纯函数，见 include/app/calendar.hpp）

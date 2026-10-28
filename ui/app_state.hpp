@@ -29,6 +29,7 @@ struct AppState
     std::chrono::year_month_day weekStart{};      // 当前周的周一
     std::vector<core::Entry>  entries;            // 内存快照（compose 里不读盘）
     std::string               error;
+    std::string               selectedId;   // 详情面板当前显示的记录（空 = 不显示）
     bool                      loaded = false;
 };
 

@@ -138,6 +138,11 @@ void compose(eui::Ui& ui, const eui::Screen& screen) {
             break;
     }
 
+    // 详情面板：点开卡片才显示完整内容
+    if (!state.selectedId.empty()) {
+        composeDetailPanel(ui, state, content);
+    }
+
     // 底部：数据来源（双击启动时当前目录是 exe 所在目录，这行能避免"数据丢了"的误会）
     ui.text("footer.data")
         .position(content.x, screen.height - kFooterHeight)

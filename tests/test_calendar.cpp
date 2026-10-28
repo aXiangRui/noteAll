@@ -217,3 +217,26 @@ TEST_CASE("placeEntry：只有日期 = 全天；没有 occurred = 未排时间")
     const auto unplaced = app::placeEntry(unknown, shanghai());
     CHECK_FALSE(unplaced.hasTime);
 }
+
+TEST_CASE("cardTitle：有摘要用摘要，没摘要就按码点截断原文")
+{
+    auto entry = makeEntry("这是一段很长很长的原始内容，长到卡片上肯定放不下", sys_days{ ymd(2026, 10, 27) });
+
+    // 没摘要 → 截到 14 个码点 + 省略号（不能截在多字节字符中间，否则乱码）
+    const std::string truncated = app::cardTitle(entry, 14);
+    CHECK(truncated.size() > 14);
+    CHECK(truncated.substr(truncated.size() - 3) == "…");
+    CHECK(truncated.find("这是") == 0);
+
+    // 有摘要 → 直接用摘要，不截
+    entry.summary = "与老张开会";
+    CHECK(app::cardTitle(entry) == "与老张开会");
+
+    // 短文本不截
+    auto shortOne = makeEntry("跑步", sys_days{ ymd(2026, 10, 27) });
+    CHECK(app::cardTitle(shortOne) == "跑步");
+
+    // 空文本兜底
+    auto empty = makeEntry("", sys_days{ ymd(2026, 10, 27) });
+    CHECK(app::cardTitle(empty) == "（无标题）");
+}

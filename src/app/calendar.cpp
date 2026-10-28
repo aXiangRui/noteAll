@@ -217,6 +217,34 @@ std::string displayTitle(const core::Entry& entry){
     return entry.raw_text;
 }
 
+std::string cardTitle(const core::Entry& entry, std::size_t maxCodePoints)
+{
+    const std::string& source = entry.summary.empty() ? entry.raw_text : entry.summary;
+    if (source.empty())
+    {
+        return "（无标题）";
+    }
+
+    // 按 UTF-8 码点截断：一个汉字 3 字节，截在第 1 或第 2 个字节上就成乱码了。
+    std::size_t codePoints = 0;
+    std::size_t byteIndex  = 0;
+
+    while (byteIndex < source.size())
+    {
+        if ((static_cast<unsigned char>(source[byteIndex]) & 0xC0) != 0x80)
+        {
+            if (codePoints == maxCodePoints)
+            {
+                return source.substr(0, byteIndex) + "…";
+            }
+            ++codePoints;
+        }
+        ++byteIndex;
+    }
+
+    return source;   // 没超长就原样返回
+}
+
 std::string weekRangeLabel(std::chrono::year_month_day weekStart)
 {
     const std::chrono::sys_days start{weekStart};
