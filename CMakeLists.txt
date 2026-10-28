@@ -201,6 +201,11 @@ if(EXISTS "${EUI_NEO_DIR}/CMakeLists.txt")
     add_executable(note_gui app.cpp)
     eui_neo_configure_app(note_gui)
 
+    # ui_demo：步骤 0 的验证程序（中文输入法 / 多行编辑 / 长列表滚动）。
+    # 它不碰 core，纯粹用来判断这个 UI 框架能不能做记事软件。
+    add_executable(ui_demo tools/ui_demo.cpp)
+    eui_neo_configure_app(ui_demo)
+
     # app.cpp 是我们的代码，但会大量调用 EUI 的模板/内联函数，
     # 用 /W3 免得被头文件里的警告淹没。
     if(MSVC)
