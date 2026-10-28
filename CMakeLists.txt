@@ -223,6 +223,20 @@ if(EXISTS "${EUI_NEO_DIR}/CMakeLists.txt")
     target_link_libraries(note_gui PRIVATE app core)
     eui_neo_configure_app(note_gui)
 
+    # 我们自己的界面资源（字体等）拷到 exe 旁边。
+    # 必须放在 eui_neo_configure_app 之后：它那步会先把框架自带的 assets 拷过来，
+    # 我们这步再把 assets/gui 里平铺的文件合并进去（copy_directory 不删已有文件）。
+    set(NOTE_GUI_ASSETS ${CMAKE_CURRENT_SOURCE_DIR}/assets/gui)
+    if(EXISTS "${NOTE_GUI_ASSETS}")
+        add_custom_command(TARGET note_gui POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:note_gui>/assets"
+            COMMAND ${CMAKE_COMMAND} -E copy_directory
+                "${NOTE_GUI_ASSETS}" "$<TARGET_FILE_DIR:note_gui>/assets"
+            COMMENT "拷贝 assets/gui 到 $<TARGET_FILE_DIR:note_gui>/assets")
+    else()
+        message(STATUS "note_gui：没有 assets/gui，用框架自带字体")
+    endif()
+
     # ui_demo：步骤 0 的验证程序（中文输入法 / 多行编辑 / 长列表滚动）。
     # 它不碰 core，纯粹用来判断这个 UI 框架能不能做记事软件。
     add_executable(ui_demo tools/ui_demo.cpp)

@@ -63,7 +63,11 @@ void composeSidebarItem(eui::Ui& ui, const std::string& id, float y, const std::
 const DslAppConfig& dslAppConfig() {
     static const DslAppConfig config = DslAppConfig{}
         .title("noteAll")
-        .windowSize(1320, 760);
+        .windowSize(1320, 760)
+        // 正文用思源黑体（assets/gui 里，构建时自动拷到 exe 旁边）。
+        // EUI 找字体只认文件名 → 必须平铺在 assets/ 根下，写子目录会找不到。
+        // 文件缺失时会退回框架自带的中文字体，不会变成方块。
+        .textFont("SourceHanSansSC-Regular-2.otf");
     return config;
 }
 
