@@ -96,9 +96,12 @@ target_link_libraries(parse PUBLIC core)
 # 两边各写一份，就是"同一个程序看到两份数据"这种最难查的 bug。
 # ---------------------------------------------------------------------------
 add_library(app
-    src/app/calendar.cpp)
+    src/app/api_key.cpp
+    src/app/calendar.cpp
+    src/app/entry_service.cpp)
 target_include_directories(app PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
-target_link_libraries(app PUBLIC core)
+# parse：addFromText 要解析中文时间（"明天下午三点"）
+target_link_libraries(app PUBLIC core parse)
 
 # ---------------------------------------------------------------------------
 # ⚠️ flow（草稿调度）与 workflow（编排引擎）已移到 labs/，不再参与主线构建。
@@ -217,11 +220,14 @@ if(EXISTS "${EUI_NEO_DIR}/CMakeLists.txt")
         ui/state.cpp
         ui/week_page.cpp
         ui/settings_page.cpp
-        ui/detail_panel.cpp)
+        ui/detail_panel.cpp
+        ui/compose_panel.cpp
+        ui/draft_runner.cpp)
     # ui/：模块的 compose 函数与共享状态（app_state.hpp / pages.hpp）
     target_include_directories(note_gui PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/ui)
     # app 库：dataPath() + 周视图数据准备（纯函数，见 include/app/calendar.hpp）
-    target_link_libraries(note_gui PRIVATE app core)
+    # llm：新增记录后要在后台生成草稿（draft_runner）
+    target_link_libraries(note_gui PRIVATE app core llm)
     eui_neo_configure_app(note_gui)
 
     # 我们自己的界面资源（字体等）拷到 exe 旁边。

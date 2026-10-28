@@ -84,13 +84,19 @@ void composeTopBar(eui::Ui& ui, AppState& state, const PageRect& area)
         state.weekStart = std::chrono::year_month_day{
             std::chrono::sys_days{ state.weekStart } + std::chrono::days{ 7 } };
     });
+    composeChip(ui, "nav.add", area.x + area.width - 196.0f, y, 96.0f, "＋ 新增", [&state] {
+        state.composing = true;
+        state.composeText.clear();
+        state.composeError.clear();
+    });
+
     composeChip(ui, "nav.reload", area.x + area.width - 88.0f, y, 88.0f, "刷新", [&state] {
         reloadData(state);
     });
 
     ui.text("week.range")
         .position(area.x + 336.0f, y + 7.0f)
-        .size(std::max(160.0f, area.width - 336.0f - 100.0f), kLineCaption)
+        .size(std::max(120.0f, area.width - 336.0f - 220.0f), kLineCaption)
         .text(app::weekRangeLabel(state.weekStart))
         .fontSize(kFontRange)
         .color(colors::kText)

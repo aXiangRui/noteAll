@@ -15,6 +15,7 @@
 #include <algorithm>
 #include <string>
 
+#include "draft_runner.hpp"
 #include "pages.hpp"
 
 namespace app {
@@ -77,6 +78,9 @@ const DslAppConfig& dslAppConfig() {
 void compose(eui::Ui& ui, const eui::Screen& screen) {
     ensureLoaded(state);
 
+    // 每帧检查后台草稿有没有回来（回来就写盘 + 刷新）
+    pollDraftResult(state);
+
     // 页面底：银白
     ui.rect("page.bg")
         .position(0.0f, 0.0f)
@@ -136,6 +140,11 @@ void compose(eui::Ui& ui, const eui::Screen& screen) {
         case Page::Settings:
             composeSettingsPage(ui, state, content);
             break;
+    }
+
+    // 新增面板（覆盖层）
+    if (state.composing) {
+        composeComposePanel(ui, state, content);
     }
 
     // 详情面板：点开卡片才显示完整内容

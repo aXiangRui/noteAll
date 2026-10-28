@@ -29,6 +29,9 @@ void composeWeekPage(eui::Ui& ui, AppState& state, const PageRect& area);
 // 模块：设置
 void composeSettingsPage(eui::Ui& ui, AppState& state, const PageRect& area);
 
+// 覆盖层：新增面板（输入框 + 确认，确认后 add → 后台生成草稿）
+void composeComposePanel(eui::Ui& ui, AppState& state, const PageRect& area);
+
 // 覆盖层：选中一条记录后的详情面板（点卡片才出现，显示完整内容）
 void composeDetailPanel(eui::Ui& ui, AppState& state, const PageRect& area);
 

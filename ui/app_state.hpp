@@ -30,6 +30,11 @@ struct AppState
     std::vector<core::Entry>  entries;            // 内存快照（compose 里不读盘）
     std::string               error;
     std::string               selectedId;   // 详情面板当前显示的记录（空 = 不显示）
+
+    // 「新增」面板：composing = 面板打开，composeText = 正在输入的内容
+    bool                      composing = false;
+    std::string               composeText;
+    std::string               composeError;
     bool                      loaded = false;
 };
 
