@@ -212,7 +212,13 @@ if(EXISTS "${EUI_NEO_DIR}/CMakeLists.txt")
         add_compile_options(/W4)   # 我们自己的目标恢复 /W4
     endif()
 
-    add_executable(note_gui app.cpp)
+    add_executable(note_gui
+        app.cpp
+        ui/state.cpp
+        ui/week_page.cpp
+        ui/settings_page.cpp)
+    # ui/：模块的 compose 函数与共享状态（app_state.hpp / pages.hpp）
+    target_include_directories(note_gui PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/ui)
     # app 库：dataPath() + 周视图数据准备（纯函数，见 include/app/calendar.hpp）
     target_link_libraries(note_gui PRIVATE app core)
     eui_neo_configure_app(note_gui)

@@ -190,3 +190,30 @@ for (int i = 0; i < 7; ++i) {
 3. `compose` 里有没有 IO / 分配大数组？
 4. 数字是相对 `screen.width/height` 算的吗？（窗口一拉就错位 = 这里）
 5. 中文显示不出来 → 检查字体文件是否真的在 `<exe>/assets/` 下。
+
+## 10. 本项目的界面结构（加模块看这里）
+
+```
+app.cpp                壳：窗口、背景、侧边栏、底部信息、按 state.page 分发
+ui/app_state.hpp       共享状态 AppState + 全部配色（银白 / 淡蓝的唯一来源）
+ui/state.cpp           读盘 reloadData()、今天 todayLocal()、key 是否配置
+ui/pages.hpp           每个模块的 compose 声明 + PageRect（可用绘图区域）
+ui/week_page.cpp       模块「周视图」
+ui/settings_page.cpp   模块「设置」
+```
+
+**加一个新模块（比如月视图）只要四步：**
+
+1. `ui/app_state.hpp` 的 `enum class Page` 加一项 `Month`；
+2. 新建 `ui/month_page.cpp`，实现
+   `void composeMonthPage(eui::Ui&, AppState&, const PageRect&)`；
+3. `ui/pages.hpp` 声明它；
+4. `app.cpp` 里侧边栏加一行 `composeSidebarItem(ui, "nav.month", y, "月视图", Page::Month)`，
+   分发处加一个 `case Page::Month:`。
+
+不需要动别的模块，也不需要动数据层 —— 数据层的入口永远是
+`app::buildWeek()` 这类**纯函数**，新模块自己决定怎么摊。
+
+**布局约定：** 侧边栏 176 px 固定；内容区由 `PageRect` 给出（已扣掉侧栏和底部信息栏），
+模块内部不要再自己减边距。
+
