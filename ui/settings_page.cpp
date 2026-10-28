@@ -2,9 +2,13 @@
 //
 // 它现在的价值是把这些信息从"翻文档"变成"看一眼"。以后真正的设置项
 // （默认视图、字体大小、模型端点）都加在这个文件里，不影响周视图。
+//
+// 布局用 y 游标往下排，不要写一堆魔法数字 —— 字号一改（18–28），
+// 硬编码的绝对坐标就全废了。
 
 #include "pages.hpp"
 
+#include <algorithm>
 #include <string>
 
 namespace app
@@ -12,6 +16,14 @@ namespace app
 
 namespace
 {
+
+using namespace metrics;
+
+constexpr float kSectionGap = 14.0f;
+constexpr float kRowHeight = 28.0f;
+constexpr float kRowGap = 6.0f;
+constexpr float kValueIndent = 116.0f;
+constexpr float kChipHeight = 40.0f;
 
 void composeSection(eui::Ui& ui, const std::string& id, float x, float y, float width,
                     float height, const std::string& title)
@@ -25,31 +37,52 @@ void composeSection(eui::Ui& ui, const std::string& id, float x, float y, float 
         .build();
 
     ui.text(id + ".title")
-        .position(x + 16.0f, y + 12.0f)
-        .size(width - 32.0f, 22.0f)
+        .position(x + 18.0f, y + 14.0f)
+        .size(width - 36.0f, kLineBody)
         .text(title)
-        .fontSize(15.0f)
+        .fontSize(kFontBody)
         .color(colors::kKindEvent)
         .build();
 }
 
+/** 一行「标签：值」，y 已经是这一行的顶边。 */
 void composeRow(eui::Ui& ui, const std::string& id, float x, float y, float width,
                 const std::string& label, const std::string& value)
 {
     ui.text(id + ".label")
         .position(x, y)
-        .size(96.0f, 20.0f)
+        .size(kValueIndent - 12.0f, kLineBody)
         .text(label)
-        .fontSize(13.0f)
+        .fontSize(kFontCaption)
         .color(colors::kMuted)
         .build();
 
     ui.text(id + ".value")
-        .position(x + 100.0f, y)
-        .size(width - 116.0f, 20.0f)
+        .position(x + kValueIndent, y)
+        .size(width - kValueIndent, kLineBody)
         .text(value)
-        .fontSize(13.0f)
+        .fontSize(kFontBody)
         .color(colors::kText)
+        .build();
+}
+
+void composeButton(eui::Ui& ui, const std::string& id, float x, float y, float width,
+                   const std::string& label, std::function<void()> onClick)
+{
+    ui.stack(id)
+        .position(x, y)
+        .size(width, kChipHeight)
+        .onClick(std::move(onClick))
+        .content([&] {
+            ui.rect(id + ".bg")
+                .position(0.0f, 0.0f).size(width, kChipHeight).radius(9.0f)
+                .color(colors::kAccent).border(1.0f, colors::kCardBorder).build();
+            ui.text(id + ".label")
+                .position(0.0f, 9.0f).size(width, kLineCaption)
+                .text(label).fontSize(kFontCaption)
+                .horizontalAlign(eui::HorizontalAlign::Center)
+                .color(colors::kText).build();
+        })
         .build();
 }
 
@@ -57,19 +90,19 @@ void composeRow(eui::Ui& ui, const std::string& id, float x, float y, float widt
 
 void composeSettingsPage(eui::Ui& ui, AppState& state, const PageRect& area)
 {
-    const float width = std::min(720.0f, area.width);
+    const float width = std::min(780.0f, area.width);
+    float       y = area.y;
 
     ui.text("settings.heading")
-        .position(area.x, area.y)
-        .size(width, 30.0f)
+        .position(area.x, y)
+        .size(width, kLineTitle)
         .text("设置")
-        .fontSize(22.0f)
+        .fontSize(kFontHeading)
         .color(colors::kText)
         .build();
+    y += kLineTitle + 8.0f;
 
     // ---- 数据 ----
-    composeSection(ui, "settings.data", area.x, area.y + 44.0f, width, 158.0f, "数据");
-
     std::size_t alive = 0;
     std::size_t deleted = 0;
     for (const auto& entry : state.entries)
@@ -77,66 +110,76 @@ void composeSettingsPage(eui::Ui& ui, AppState& state, const PageRect& area)
         (entry.deleted_at ? deleted : alive) += 1;
     }
 
-    composeRow(ui, "settings.data.path", area.x + 16.0f, area.y + 74.0f, width,
+    const float dataHeight = 14.0f + kLineBody + 12.0f + kRowHeight * 3.0f + kRowGap * 2.0f +
+                             kChipHeight + 16.0f;
+    composeSection(ui, "settings.data", area.x, y, width, dataHeight, "数据");
+
+    float rowY = y + 14.0f + kLineBody + 12.0f;
+    composeRow(ui, "settings.data.path", area.x + 18.0f, rowY, width - 36.0f,
                "数据文件", app::dataPath().string());
-    composeRow(ui, "settings.data.count", area.x + 16.0f, area.y + 102.0f, width,
+    rowY += kRowHeight + kRowGap;
+    composeRow(ui, "settings.data.count", area.x + 18.0f, rowY, width - 36.0f,
                "记录数", std::to_string(alive) + " 条（已删除 " + std::to_string(deleted) + " 条）");
-    composeRow(ui, "settings.data.timezone", area.x + 16.0f, area.y + 130.0f, width,
+    rowY += kRowHeight + kRowGap;
+    composeRow(ui, "settings.data.timezone", area.x + 18.0f, rowY, width - 36.0f,
                "时区", std::string{ std::chrono::current_zone()->name() });
 
-    ui.stack("settings.data.reload")
-        .position(area.x + 16.0f, area.y + 158.0f)
-        .size(96.0f, 30.0f)
-        .onClick([&state] { reloadData(state); })
-        .content([&] {
-            ui.rect("settings.data.reload.bg")
-                .position(0.0f, 0.0f).size(96.0f, 30.0f).radius(8.0f)
-                .color(colors::kAccent).border(1.0f, colors::kCardBorder).build();
-            ui.text("settings.data.reload.label")
-                .position(0.0f, 7.0f).size(96.0f, 18.0f)
-                .text("重新读取").fontSize(13.0f)
-                .horizontalAlign(eui::HorizontalAlign::Center)
-                .color(colors::kText).build();
-        })
-        .build();
+    composeButton(ui, "settings.data.reload", area.x + 18.0f, rowY + kRowHeight + 10.0f, 108.0f,
+                  "重新读取", [&state] { reloadData(state); });
+
+    y += dataHeight + kSectionGap;
 
     // ---- 模型（草稿生成）----
-    composeSection(ui, "settings.llm", area.x, area.y + 218.0f, width, 132.0f, "模型（草稿生成）");
+    const bool   keyReady = llmKeyConfigured();
+    const std::string hintText =
+        keyReady ? "草稿会调用模型生成摘要 / 标签 / 类型。没网或余额不足时不阻塞记录，"
+                   "失败原因可以用 note show <id> 看到。"
+                 : "把 DeepSeek 的 key 放进数据文件旁边的 note.key（内容就是 key 本身），"
+                   "或者设环境变量 NOTE_LLM_KEY。详见 docs/配置.md。";
 
-    composeRow(ui, "settings.llm.key", area.x + 16.0f, area.y + 248.0f, width,
-               "API key", llmKeyConfigured() ? "已配置" : "未配置");
+    const float llmHeight = 14.0f + kLineBody + 12.0f + kRowHeight + 10.0f + kLineBody * 2.0f + 16.0f;
+    composeSection(ui, "settings.llm", area.x, y, width, llmHeight, "模型（草稿生成）");
+
+    rowY = y + 14.0f + kLineBody + 12.0f;
+    composeRow(ui, "settings.llm.key", area.x + 18.0f, rowY, width - 36.0f,
+               "API key", keyReady ? "已配置" : "未配置");
 
     ui.text("settings.llm.hint")
-        .position(area.x + 16.0f, area.y + 276.0f)
-        .size(width - 32.0f, 60.0f)
-        .text(llmKeyConfigured()
-                  ? "草稿会调用模型生成摘要/标签/类型。没网或余额不足时不会阻塞记录，"
-                    "失败原因可以在 note show <id> 里看到。"
-                  : "把 DeepSeek 的 key 放进数据文件旁边的 note.key（内容就是 key 本身），"
-                    "或者设环境变量 NOTE_LLM_KEY。详见 docs/配置.md。")
-        .fontSize(12.0f)
-        .lineHeight(18.0f)
+        .position(area.x + 18.0f, rowY + kRowHeight + 10.0f)
+        .size(width - 36.0f, kLineBody * 2.0f)
+        .text(hintText)
+        .fontSize(kFontCaption)
+        .lineHeight(kLineCaption)
         .wrap(true)
         .color(colors::kMuted)
         .build();
 
+    y += llmHeight + kSectionGap;
+
     // ---- 关于 ----
-    composeSection(ui, "settings.about", area.x, area.y + 366.0f, width, 118.0f, "关于");
-    composeRow(ui, "settings.about.version", area.x + 16.0f, area.y + 396.0f, width,
+    const float aboutHeight = 14.0f + kLineBody + 12.0f + kRowHeight * 3.0f + 14.0f;
+    composeSection(ui, "settings.about", area.x, y, width, aboutHeight, "关于");
+
+    rowY = y + 14.0f + kLineBody + 12.0f;
+    composeRow(ui, "settings.about.version", area.x + 18.0f, rowY, width - 36.0f,
                "版本", "noteAll 0.1.0");
-    composeRow(ui, "settings.about.ui", area.x + 16.0f, area.y + 424.0f, width,
-               "界面", "EUI-NEO（C++17 + OpenGL，自绘 UI）");
-    composeRow(ui, "settings.about.theme", area.x + 16.0f, area.y + 452.0f, width,
-               "主题", "银白底 / 淡蓝任务卡");
+    rowY += kRowHeight;
+    composeRow(ui, "settings.about.ui", area.x + 18.0f, rowY, width - 36.0f,
+               "界面", "EUI-NEO（C++17 + OpenGL 自绘）");
+    rowY += kRowHeight;
+    composeRow(ui, "settings.about.theme", area.x + 18.0f, rowY, width - 36.0f,
+               "主题", "银白底 / 淡蓝任务卡 / 思源黑体");
+
+    y += aboutHeight;
 
     if (!state.error.empty())
     {
         ui.text("settings.error")
-            .position(area.x, area.y + 500.0f)
-            .size(width, 40.0f)
+            .position(area.x, y + 8.0f)
+            .size(width, kLineCaption * 2.0f)
             .text(state.error)
-            .fontSize(12.0f)
-            .lineHeight(16.0f)
+            .fontSize(kFontCaption)
+            .lineHeight(kLineCaption)
             .wrap(true)
             .color(colors::kDanger)
             .build();

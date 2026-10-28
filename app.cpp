@@ -24,34 +24,37 @@ namespace {
 // 整个 GUI 只有这一份状态（单窗口应用）。
 AppState state;
 
-constexpr float kSidebarWidth = 176.0f;
-constexpr float kSidebarPad = 14.0f;
-constexpr float kContentGap = 16.0f;
-constexpr float kFooterHeight = 22.0f;
+// 字号 18–28 之后，侧栏和条目都要跟着变宽变高。
+constexpr float kSidebarWidth = 216.0f;
+constexpr float kSidebarPad = 16.0f;
+constexpr float kContentGap = 18.0f;
+constexpr float kFooterHeight = 28.0f;
+constexpr float kSidebarItemHeight = 44.0f;
 
 void composeSidebarItem(eui::Ui& ui, const std::string& id, float y, const std::string& label,
                         Page page) {
     const bool selected = state.page == page;
+    const float itemWidth = kSidebarWidth - kSidebarPad * 2.0f;
 
     ui.stack(id)
         .position(kSidebarPad, y)
-        .size(kSidebarWidth - kSidebarPad * 2.0f, 36.0f)
+        .size(itemWidth, kSidebarItemHeight)
         .onClick([page] { state.page = page; })
         .content([&] {
             if (selected) {
                 ui.rect(id + ".pill")
                     .position(0.0f, 0.0f)
-                    .size(kSidebarWidth - kSidebarPad * 2.0f, 36.0f)
-                    .radius(9.0f)
+                    .size(itemWidth, kSidebarItemHeight)
+                    .radius(10.0f)
                     .color(colors::kAccent)
                     .build();
             }
 
             ui.text(id + ".label")
-                .position(12.0f, 9.0f)
-                .size(kSidebarWidth - kSidebarPad * 2.0f - 20.0f, 20.0f)
+                .position(14.0f, 9.0f)
+                .size(itemWidth - 24.0f, metrics::kLineBody)
                 .text(label)
-                .fontSize(14.0f)
+                .fontSize(metrics::kFontBody)
                 .color(selected ? colors::kKindEvent : colors::kText)
                 .build();
         })
@@ -89,39 +92,41 @@ void compose(eui::Ui& ui, const eui::Screen& screen) {
         .build();
 
     ui.text("sidebar.brand")
-        .position(kSidebarPad, 16.0f)
-        .size(kSidebarWidth - kSidebarPad * 2.0f, 26.0f)
+        .position(kSidebarPad, 14.0f)
+        .size(kSidebarWidth - kSidebarPad * 2.0f, metrics::kLineTitle)
         .text("noteAll")
-        .fontSize(19.0f)
+        .fontSize(metrics::kFontTitle)
         .color(colors::kKindEvent)
         .build();
 
     ui.text("sidebar.subtitle")
-        .position(kSidebarPad, 42.0f)
-        .size(kSidebarWidth - kSidebarPad * 2.0f, 16.0f)
+        .position(kSidebarPad, 54.0f)
+        .size(kSidebarWidth - kSidebarPad * 2.0f, metrics::kLineCaption)
         .text("时间轴笔记本")
-        .fontSize(11.0f)
+        .fontSize(metrics::kFontCaption)
         .color(colors::kMuted)
         .build();
 
     // 模块列表 —— 预留：月视图 / 搜索 / 复习计划 / 导入 都往这下面加
-    composeSidebarItem(ui, "nav.week", 76.0f, "周视图", Page::Week);
-    composeSidebarItem(ui, "nav.settings", 118.0f, "设置", Page::Settings);
+    const float firstItemY = 96.0f;
+    composeSidebarItem(ui, "nav.week", firstItemY, "周视图", Page::Week);
+    composeSidebarItem(ui, "nav.settings", firstItemY + kSidebarItemHeight + 8.0f, "设置",
+                       Page::Settings);
 
     ui.text("sidebar.reserved")
-        .position(kSidebarPad, 168.0f)
-        .size(kSidebarWidth - kSidebarPad * 2.0f, 16.0f)
+        .position(kSidebarPad, firstItemY + (kSidebarItemHeight + 8.0f) * 2.0f + 12.0f)
+        .size(kSidebarWidth - kSidebarPad * 2.0f, metrics::kLineCaption)
         .text("（更多模块预留）")
-        .fontSize(11.0f)
+        .fontSize(metrics::kFontCaption)
         .color(colors::kMuted)
         .build();
 
     // 内容区
     const PageRect content{
         kSidebarWidth + kContentGap,
-        16.0f,
+        18.0f,
         std::max(240.0f, screen.width - kSidebarWidth - kContentGap * 2.0f),
-        std::max(160.0f, screen.height - 16.0f - kFooterHeight - 8.0f),
+        std::max(160.0f, screen.height - 18.0f - kFooterHeight - 8.0f),
     };
 
     switch (state.page) {
@@ -136,9 +141,9 @@ void compose(eui::Ui& ui, const eui::Screen& screen) {
     // 底部：数据来源（双击启动时当前目录是 exe 所在目录，这行能避免"数据丢了"的误会）
     ui.text("footer.data")
         .position(content.x, screen.height - kFooterHeight)
-        .size(content.width, 16.0f)
+        .size(content.width, metrics::kLineCaption)
         .text("数据: " + app::dataPath().string())
-        .fontSize(11.0f)
+        .fontSize(metrics::kFontCaption)
         .color(colors::kMuted)
         .build();
 }

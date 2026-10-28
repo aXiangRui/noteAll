@@ -45,6 +45,30 @@ void reloadData(AppState& state);
 bool llmKeyConfigured();
 
 // ---------------------------------------------------------------------------
+// 字号与行高
+//
+// 规则：界面上所有文字都落在 18–28 之间（不含则不写）。
+// 全部集中在这里，改一次全局生效；页面里禁止再出现裸的字号数字。
+//
+// 注意：字号变大后，卡片高度/列头高度/侧栏宽度都要跟着变 ——
+// 那些在各自的页面文件里，用同一套常量算出来。
+// ---------------------------------------------------------------------------
+namespace metrics
+{
+
+inline constexpr float kFontCaption = 18.0f;   // 最小：时间、日期、脚注、提示
+inline constexpr float kFontBody = 20.0f;      // 正文：任务标题、侧栏项、行值
+inline constexpr float kFontRange = 22.0f;     // 周范围
+inline constexpr float kFontHeading = 26.0f;   // 页面标题（设置）
+inline constexpr float kFontTitle = 28.0f;     // 最大：品牌名
+
+inline constexpr float kLineCaption = 24.0f;
+inline constexpr float kLineBody = 26.0f;
+inline constexpr float kLineTitle = 34.0f;
+
+}  // namespace metrics
+
+// ---------------------------------------------------------------------------
 // 配色：银白底 + 淡蓝强调
 //
 // 统一放在这里，模块之间才不会各自发明颜色。改名时也只改一处。
