@@ -50,6 +50,12 @@ void reloadData(AppState& state);
 /** 有没有可用的模型 key：环境变量 > 数据目录/note.key > %APPDATA%/noteAll/note.key */
 bool llmKeyConfigured();
 
+/** 还有多少条欠草稿（draft_status == Pending）。 */
+std::size_t pendingDraftCount(AppState const& state);
+
+/** 欠草稿的第一条（按时间倒序，优先补新的）；没有就返回 nullptr。 */
+core::Entry const* firstPendingDraft(AppState const& state);
+
 // ---------------------------------------------------------------------------
 // 字号与行高
 //

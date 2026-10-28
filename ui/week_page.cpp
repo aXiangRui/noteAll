@@ -10,6 +10,7 @@
 //   左侧 58px 刻度槽（00:00 / 06:00 / 12:00 / 18:00 / 24:00）
 //   七列等宽；列内 24h 轴高度 = 列高 - 列头 - 底部"未排时间"条
 
+#include "draft_runner.hpp"
 #include "pages.hpp"
 
 #include <algorithm>
@@ -90,13 +91,30 @@ void composeTopBar(eui::Ui& ui, AppState& state, const PageRect& area)
         state.composeError.clear();
     });
 
+    // 补草稿：历史记录（或上次失败/中断的）一条一条补，点一次补一条。
+    // 显示剩余条数，让人知道还要点几次；正在生成时显示"生成中"。
+    const std::size_t pending = pendingDraftCount(state);
+    if (pending > 0 && llmKeyConfigured())
+    {
+        const std::string label =
+            draftBusy() ? "生成中…" : ("补草稿 " + std::to_string(pending));
+
+        composeChip(ui, "nav.draft", area.x + area.width - 344.0f, y, 136.0f, label, [&state] {
+            if (core::Entry const* entry = firstPendingDraft(state))
+            {
+                // 单条先落一次盘再生成：runner 只认 id + 原文
+                startDraftInBackground(entry->id, entry->raw_text);
+            }
+        });
+    }
+
     composeChip(ui, "nav.reload", area.x + area.width - 88.0f, y, 88.0f, "刷新", [&state] {
         reloadData(state);
     });
 
     ui.text("week.range")
         .position(area.x + 336.0f, y + 7.0f)
-        .size(std::max(120.0f, area.width - 336.0f - 220.0f), kLineCaption)
+        .size(std::max(120.0f, area.width - 336.0f - 360.0f), kLineCaption)
         .text(app::weekRangeLabel(state.weekStart))
         .fontSize(kFontRange)
         .color(colors::kText)

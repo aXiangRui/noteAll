@@ -175,6 +175,17 @@ bool pollDraftResult(AppState& state)
     }
 
     reloadData(state);   // 重新读一遍，让列表和详情看到新标题
+
+    // 自动接力：这一条成功了、还有欠账，就接着补下一条（点一次「补草稿」能补齐）。
+    // 只在**成功**时接力 —— 失败还继续就是无限烧 token。
+    if (done.error.empty())
+    {
+        if (core::Entry const* next = firstPendingDraft(state))
+        {
+            startDraftInBackground(next->id, next->raw_text);
+        }
+    }
+
     return true;
 }
 

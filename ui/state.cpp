@@ -3,6 +3,7 @@
 #include <cstdlib>
 #include <filesystem>
 
+#include "app/api_key.hpp"
 #include "core/core.hpp"
 
 namespace app
@@ -50,36 +51,34 @@ void ensureLoaded(AppState& state)
 
 bool llmKeyConfigured()
 {
-    if (const char* env = std::getenv("NOTE_LLM_KEY"); env != nullptr && *env != '\0')
-    {
-        return true;
-    }
+    // 规则和草稿线程、CLI 完全共用一份（app::findApiKey）：
+    // 各自实现的话，最尴尬的情况是设置页说"已配置"、真生成时说"没找到"。
+    return app::findApiKey(app::dataPath()).has_value();
+}
 
-    // 查找顺序必须和 main.cpp 里 resolveApiKey 一致，否则设置页会说"已配置"、
-    // 真正生成草稿时却说"没找到 key"。
-    std::error_code ec;
-
-    std::filesystem::path dataDir = dataPath().parent_path();
-    if (dataDir.empty())
+std::size_t pendingDraftCount(AppState const& state)
+{
+    std::size_t count = 0;
+    for (const auto& entry : state.entries)
     {
-        dataDir = ".";
-    }
-    if (std::filesystem::is_regular_file(dataDir / "note.key", ec))
-    {
-        return true;
-    }
-
-#ifdef _WIN32
-    if (const char* appData = std::getenv("APPDATA"); appData != nullptr && *appData != '\0')
-    {
-        if (std::filesystem::is_regular_file(std::filesystem::path{ appData } / "noteAll" / "note.key", ec))
+        if (!entry.deleted_at && entry.draft_status == core::DraftStatus::Pending)
         {
-            return true;
+            ++count;
         }
     }
-#endif
+    return count;
+}
 
-    return false;
+core::Entry const* firstPendingDraft(AppState const& state)
+{
+    for (const auto& entry : state.entries)
+    {
+        if (!entry.deleted_at && entry.draft_status == core::DraftStatus::Pending)
+        {
+            return &entry;
+        }
+    }
+    return nullptr;
 }
 
 }  // namespace app
