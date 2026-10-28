@@ -10,6 +10,7 @@
 //
 // 规格见 docs/ROADMAP.md §2.6。
 
+#include "app/calendar.hpp"
 #include "core/core.hpp"
 #include "core/note_log.hpp"
 #include "parse/timeParse.hpp"
@@ -120,13 +121,11 @@ bool readLineUtf8(std::string& out)
 }
 
 // 数据文件位置：环境变量 NOTE_FILE > 当前目录的 notes.jsonl（ROADMAP §0.6）。
+// 规则实现放在 app 库里（app::dataPath）—— GUI 也用它，两边必须是同一个路径，
+// 否则就会出现"同一个程序看到两份数据"这种最难查的 bug。
 std::filesystem::path dataPath()
 {
-    if (const char* env = std::getenv("NOTE_FILE"))
-    {
-        return env;
-    }
-    return "notes.jsonl";
+    return app::dataPath();
 }
 
 // ---------------------------------------------------------------------------

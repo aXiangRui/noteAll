@@ -57,3 +57,7 @@ third_party/EUI-NEO/
 
 # ---- dist 里运行时的 assets（构建产物，别进库）----
 dist/*/assets/
+# ---- dist 子目录里的数据文件（GUI 双击时落在 exe 旁边）----
+dist/**/*.jsonl
+dist/**/*.lock
+dist/**/*.log

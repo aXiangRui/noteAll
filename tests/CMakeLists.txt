@@ -16,9 +16,10 @@ add_executable(tests
     test_store.cpp       # JSONL 持久化
     test_core.cpp        # Core 门面
     test_durability.cpp  # 数据基石：格式版本 / 墓碑 / 来源 / 文件锁
-    test_parse.cpp)      # 中文时间解析
+    test_parse.cpp       # 中文时间解析
+    test_calendar.cpp)   # 周视图数据准备（纯函数）
 
-target_link_libraries(tests PRIVATE core parse)
+target_link_libraries(tests PRIVATE core parse app)
 
 # ---------------------------------------------------------------------------
 # 实验性模块（暂缓，不进 ctest）

@@ -87,6 +87,20 @@ add_library(parse
 target_link_libraries(parse PUBLIC core)
 
 # ---------------------------------------------------------------------------
+# app —— 前端共用的「应用层」：数据从哪来、怎么摊到日历上
+#
+# 不属于 UI：纯数据 + 纯函数，所以能被单测（tests/test_calendar.cpp）。
+# 也不属于 core：那层不知道"周视图"这种概念。
+#
+# 存在的理由：CLI 和 GUI 必须用同一个 dataPath()、同一套时区换算。
+# 两边各写一份，就是"同一个程序看到两份数据"这种最难查的 bug。
+# ---------------------------------------------------------------------------
+add_library(app
+    src/app/calendar.cpp)
+target_include_directories(app PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
+target_link_libraries(app PUBLIC core)
+
+# ---------------------------------------------------------------------------
 # ⚠️ flow（草稿调度）与 workflow（编排引擎）已移到 labs/，不再参与主线构建。
 #
 # 原因：它们零用户 —— note 的依赖图是 core + parse + view + llm，草稿流程
@@ -142,7 +156,7 @@ endif()
 # flow / workflow 已移到 labs/（零用户，详见 labs/README.md）。
 # ---------------------------------------------------------------------------
 add_executable(note main.cpp)
-target_link_libraries(note PRIVATE core view parse)
+target_link_libraries(note PRIVATE core view parse app)
 
 # 草稿功能需要 llm 层（Windows-only）。没它 note 其余功能照常。
 if(TARGET llm)
@@ -199,6 +213,8 @@ if(EXISTS "${EUI_NEO_DIR}/CMakeLists.txt")
     endif()
 
     add_executable(note_gui app.cpp)
+    # app 库：dataPath() + 周视图数据准备（纯函数，见 include/app/calendar.hpp）
+    target_link_libraries(note_gui PRIVATE app core)
     eui_neo_configure_app(note_gui)
 
     # ui_demo：步骤 0 的验证程序（中文输入法 / 多行编辑 / 长列表滚动）。
