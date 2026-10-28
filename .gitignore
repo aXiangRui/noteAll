@@ -54,3 +54,6 @@ dist/*.lock
 
 # ---- 外部 UI 框架（自己拷进来的副本，不入库）----
 third_party/EUI-NEO/
+
+# ---- dist 里运行时的 assets（构建产物，别进库）----
+dist/*/assets/
