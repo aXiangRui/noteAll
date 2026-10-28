@@ -60,6 +60,7 @@ void ConsoleView::RenderEntry(const core::Entry& e)
     std::cout << '\n';
 
     std::cout << "原文:      " << e.raw_text << '\n';
+    std::cout << "标题:      " << (e.title.empty() ? "（无）" : e.title) << '\n';
     std::cout << "摘要:      " << (e.summary.empty() ? "（无）" : e.summary) << '\n';
 
     std::cout << "标签:      ";

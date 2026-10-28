@@ -209,7 +209,13 @@ DayPlacement placeEntry(const core::Entry& entry, const std::chrono::time_zone& 
     return placement;
 }
 
-std::string displayTitle(const core::Entry& entry){
+std::string displayTitle(const core::Entry& entry)
+{
+    // 回退链：title → summary → 原文
+    if (!entry.title.empty())
+    {
+        return entry.title;
+    }
     if (!entry.summary.empty())
     {
         return entry.summary;
@@ -219,7 +225,7 @@ std::string displayTitle(const core::Entry& entry){
 
 std::string cardTitle(const core::Entry& entry, std::size_t maxCodePoints)
 {
-    const std::string& source = entry.summary.empty() ? entry.raw_text : entry.summary;
+    const std::string source = displayTitle(entry);
     if (source.empty())
     {
         return "（无标题）";

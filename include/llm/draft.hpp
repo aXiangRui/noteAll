@@ -16,9 +16,10 @@ namespace llm
 
 struct DraftFields
 {
+    std::string              title;   // 短标题（≤14 字，日历卡片只用它）
     std::string              summary;
     std::vector<std::string> tags;
-    std::string              kind;   // event / note / todo / thought（原样保留字符串）
+    std::string              kind;    // event / note / todo / thought（原样保留字符串）
 };
 
 struct DraftError

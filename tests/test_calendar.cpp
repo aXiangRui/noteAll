@@ -232,6 +232,11 @@ TEST_CASE("cardTitle：有摘要用摘要，没摘要就按码点截断原文")
     entry.summary = "与老张开会";
     CHECK(app::cardTitle(entry) == "与老张开会");
 
+    // title 优先于 summary（实体里有了 title 之后，列表只用它）
+    entry.title = "老张";
+    CHECK(app::cardTitle(entry) == "老张");
+    CHECK(app::displayTitle(entry) == "老张");
+
     // 短文本不截
     auto shortOne = makeEntry("跑步", sys_days{ ymd(2026, 10, 27) });
     CHECK(app::cardTitle(shortOne) == "跑步");

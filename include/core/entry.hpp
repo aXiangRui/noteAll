@@ -63,6 +63,9 @@ namespace core
         std::string              raw_text;     // 原始输入 —— 不可变，永不丢
         std::chrono::sys_seconds created_at;   // 记录时刻（UTC）
         std::optional<TimeRange> occurred;     // 事情发生的时刻/时段（UTC）；空 = 时间未知
+        // 短标题：只给列表/卡片用（时间轴上一个格子放不下整段话）。
+        // 空表示"没生成过"，显示层按 title → summary → 原文截断 依次回退。
+        std::string              title;
         std::string              summary;      // LLM 生成摘要，可为空
         std::vector<std::string> tags;         // 集合语义
         Kind                     kind = Kind::Unknown;

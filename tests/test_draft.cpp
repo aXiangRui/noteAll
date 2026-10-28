@@ -26,19 +26,30 @@ llm::ChatError chatError(llm::ChatErrorKind kind, std::string message)
 
 }  // namespace
 
-TEST_CASE("draft：合法 JSON 被解析成 summary / tags / kind")
+TEST_CASE("draft：合法 JSON 被解析成 title / summary / tags / kind")
 {
     testutil::FakeChatClient client({ replyWith(
-        R"({"summary":"与老张开会讨论排期","tags":["会议","排期"],"kind":"event"})") });
+        R"({"title":"老张开会","summary":"与老张开会讨论排期","tags":["会议","排期"],"kind":"event"})") });
 
     auto fields = llm::extractDraft(client, "明天下午三点跟老张开会讨论排期");
 
     REQUIRE(fields.has_value());
+    CHECK(fields->title == "老张开会");
     CHECK(fields->summary == "与老张开会讨论排期");
     CHECK(fields->kind == "event");
     REQUIRE(fields->tags.size() == 2);
     CHECK(fields->tags[0] == "会议");
     CHECK(client.calls() == 1);
+}
+
+TEST_CASE("draft：回复里没有 title 时退回 summary（不算失败）")
+{
+    testutil::FakeChatClient client({ replyWith(
+        R"({"summary":"周五前发周报","tags":["周报"],"kind":"todo"})") });
+
+    auto fields = llm::extractDraft(client, "记得周五前把周报发出去");
+    REQUIRE(fields.has_value());
+    CHECK(fields->title == "周五前发周报");   // ★ 老模型/老提示词也能用
 }
 
 TEST_CASE("draft：包了 ```json 围栏也能解析")

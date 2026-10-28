@@ -590,6 +590,7 @@ int execute(const std::vector<std::string>& args,
                 continue;
             }
 
+            entry.title        = fields->title;
             entry.summary      = fields->summary;
             entry.tags         = fields->tags;
             entry.kind         = core::kindFromString(fields->kind);
@@ -599,7 +600,7 @@ int execute(const std::vector<std::string>& args,
             if (auto updated = note.update(entry); !updated) { return fail("保存失败: " + updated.error()); }
 
             ++done;
-            v.RenderMessage("✓ " + entry.id + "  " + entry.summary + "  [" + fields->kind + "]");
+            v.RenderMessage("✓ " + entry.id + "  " + entry.title + "  [" + fields->kind + "]");
         }
 
         const std::size_t left = targets.size() - static_cast<std::size_t>(done + failedCount);

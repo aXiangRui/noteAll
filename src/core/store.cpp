@@ -109,6 +109,7 @@ void to_json(nlohmann::json& j, const Entry& e)
         {"id",         e.id},
         {"raw_text",   e.raw_text},            // 原文原样存，不 trim
         {"created_at", toIso(e.created_at)},   // chrono -> 字符串
+        {"title",      e.title},
         {"summary",    e.summary},
         {"tags",       e.tags},                // vector<string> 有内置支持，直接给
         {"kind",       toString(e.kind)},      // 存字符串不存数字，见坑清单 #6
@@ -137,6 +138,7 @@ void from_json(const nlohmann::json& j, Entry& e)
 {
     e.id        = j.value("id",        std::string{});
     e.raw_text  = j.value("raw_text",  std::string{});
+    e.title     = j.value("title",     std::string{});
     e.summary   = j.value("summary",   std::string{});
     e.tags      = j.value("tags",      std::vector<std::string>{});
     e.kind      = kindFromString(j.value("kind", std::string{}));

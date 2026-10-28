@@ -22,6 +22,7 @@ std::string draftPrompt(std::string const& rawText)
     return "你是笔记整理助手。把用户的一句话整理成 JSON 对象，只输出 JSON，不要解释、不要代码块。\n"
            "\n"
            "字段要求：\n"
+           "- title：不超过 14 个字的短标题，给日历卡片用（不要句号、不要引号）\n"
            "- summary：不超过 30 字的中文摘要，保留原文里的关键信息（人名、项目、时间）\n"
            "- tags：2 到 4 个中文标签，字符串数组；不要重复 kind 的含义（如「待办」「想法」），"
            "也不要用「工作」「生活」「阅读」这类空泛词\n"
@@ -98,6 +99,11 @@ std::expected<DraftFields, DraftError> extractDraft(IChatClient& client, std::st
     DraftFields fields;
     fields.summary = parsed.value("summary", std::string{});
     if (fields.summary.empty()) { return std::unexpected(badResponse("summary 缺失或为空")); }
+
+    // title 缺失不算失败：老模型/老提示词的回复里没有它也照样能用，
+    // 退回 summary 就行（卡片上显示层还会再截一次）。
+    fields.title = parsed.value("title", std::string{});
+    if (fields.title.empty()) { fields.title = fields.summary; }
 
     if (!parsed.contains("tags") || !parsed["tags"].is_array())
     {
