@@ -245,3 +245,21 @@ TEST_CASE("cardTitle：有摘要用摘要，没摘要就按码点截断原文")
     auto empty = makeEntry("", sys_days{ ymd(2026, 10, 27) });
     CHECK(app::cardTitle(empty) == "（无标题）");
 }
+TEST_CASE("elideToFit：按像素宽度裁到卡片里，超出补省略号")
+{
+    // 5 个汉字 × 20px = 100px，正好填满一行；第 6 个字符放不下 → 省略
+    CHECK(app::elideToFit("周三读书会C++23", 100.0f, 20.0f, 1) == "周三读书会…");
+
+    // 两行就放得下（C++23 折到第二行）
+    CHECK(app::elideToFit("周三读书会C++23", 100.0f, 20.0f, 2) == "周三读书会C++23");
+
+    // 短文本原样返回
+    CHECK(app::elideToFit("跑步", 200.0f, 20.0f, 1) == "跑步");
+
+    // 空文本 / 非法宽度：不崩、原样返回
+    CHECK(app::elideToFit("", 100.0f, 20.0f, 1).empty());
+    CHECK(app::elideToFit("跑步", 0.0f, 20.0f, 1) == "跑步");
+
+    // 换行符算一行：1 行装不下第二行 → 在第一行末尾截断
+    CHECK(app::elideToFit("a\nb", 100.0f, 20.0f, 1) == "a…");
+}

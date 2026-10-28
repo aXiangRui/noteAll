@@ -251,6 +251,63 @@ std::string cardTitle(const core::Entry& entry, std::size_t maxCodePoints)
     return source;   // 没超长就原样返回
 }
 
+std::string elideToFit(std::string const& text, float maxWidthPx, float fontSizePx, int maxLines)
+{
+    if (text.empty() || maxWidthPx <= 1.0f || fontSizePx <= 1.0f || maxLines <= 0)
+    {
+        return text;
+    }
+
+    // 估算单字宽度：多字节（中日韩）算 1 个字宽，单字节（拉丁/数字/符号）算 0.56。
+    // 估算宁可偏大 —— 目标是"绝不溢出"，而不是"像素级精确排版"。
+    const auto glyphWidth = [fontSizePx](std::size_t byteLength) {
+        return (byteLength > 1 ? 1.0f : 0.56f) * fontSizePx;
+    };
+
+    std::size_t byteIndex = 0;
+    float       lineWidth = 0.0f;
+    int         line      = 1;
+
+    while (byteIndex < text.size())
+    {
+        const unsigned char lead = static_cast<unsigned char>(text[byteIndex]);
+
+        if (lead == '\n')
+        {
+            ++line;
+            lineWidth = 0.0f;
+            if (line > maxLines)
+            {
+                return text.substr(0, byteIndex) + "…";
+            }
+            ++byteIndex;
+            continue;
+        }
+
+        std::size_t byteLength = 1;
+        if ((lead & 0xF8) == 0xF0) { byteLength = 4; }
+        else if ((lead & 0xF0) == 0xE0) { byteLength = 3; }
+        else if ((lead & 0xE0) == 0xC0) { byteLength = 2; }
+
+        const float width = glyphWidth(byteLength);
+
+        if (lineWidth + width > maxWidthPx)
+        {
+            if (line == maxLines)
+            {
+                return text.substr(0, byteIndex) + "…";
+            }
+            ++line;
+            lineWidth = 0.0f;
+        }
+
+        lineWidth += width;
+        byteIndex += byteLength;
+    }
+
+    return text;
+}
+
 std::string weekRangeLabel(std::chrono::year_month_day weekStart)
 {
     const std::chrono::sys_days start{weekStart};

@@ -83,7 +83,21 @@ std::string displayTitle(const core::Entry& entry);
  * 为什么必须截：卡片窄（一列约 150px），原文可能是一整段话。
  * 完整内容放在详情面板里（点卡片才出现）——列表要"扫一眼"，详情才要"读全文"。
  */
-std::string cardTitle(const core::Entry& entry, std::size_t maxCodePoints = 14);
+std::string cardTitle(const core::Entry& entry, std::size_t maxCodePoints = 10);
+
+/**
+ * 按**像素宽度**把文字裁到能放下为止，超出补省略号。
+ *
+ * 为什么需要它：卡片宽度随窗口变（最大化时一列 200px，默认窗口只有 150px），
+ * 所以"几个字"这种固定字数根本不靠谱 —— 必须在绘制时按可用宽度现算，
+ * 否则换个窗口大小标题就溢出或被裁。
+ *
+ * 宽度是估算的（中日韩 1 个字宽 = fontSize，拉丁/数字约 0.56 个字宽）：
+ * 宁可估大一点，也不让文字跑出卡片。
+ *
+ * @param maxLines 卡片里最多能放几行（按 height / lineHeight 算出来）
+ */
+std::string elideToFit(std::string const& text, float maxWidthPx, float fontSizePx, int maxLines);
 
 /** 日期区间标签："2026年10月26日 – 11月1日"。 */
 std::string weekRangeLabel(std::chrono::year_month_day weekStart);

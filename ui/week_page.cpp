@@ -38,7 +38,7 @@ constexpr float kUnplacedHeight = 54.0f;
 
 // 卡片最小高度：只为了让 18px 时刻 + 20px 标题放得下。
 // 它**不是**默认时长 —— 时长永远来自 end - start。
-constexpr float kMinCardHeight = 56.0f;
+constexpr float kMinCardHeight = 64.0f;
 constexpr float kCardGapNudge = 4.0f;
 constexpr float kMinutesPerDay = 1440.0f;
 
@@ -256,35 +256,47 @@ void composeDayColumn(eui::Ui& ui, AppState& state, const DayColumn& column, int
                             .color(app::kindColor(entry->kind))
                             .build();
 
-                        // 上边：开始时间
+                        // 卡片内的排版：开始时间在左上、结束时间在右下、标题在中间。
+                        // 宽度不写死 —— 卡片宽度随窗口变，标题必须按实际像素宽度
+                        // 现算能放几个字（elideToFit），否则换窗口就溢出/被裁。
+                        const float cardWidth  = columnWidth - 12.0f;
+                        const float innerX     = 20.0f;
+                        const float innerWidth = cardWidth - innerX - 8.0f;
+
+                        const float startRow = kLineCaption + 4.0f;                          // 时刻行
+                        const float endRow   = placement.endMinutes ? kLineCaption + 2.0f : 0.0f;
+                        const float titleArea = std::max(kLineBody, height - startRow - endRow - 4.0f);
+                        const int   titleLines =
+                            std::max(1, static_cast<int>(titleArea / kLineBody));
+
+                        // 上边左：开始时间
                         ui.text(itemId + ".start")
-                            .position(20.0f, 2.0f)
-                            .size(columnWidth - 34.0f, kLineCaption)
+                            .position(innerX, 2.0f)
+                            .size(innerWidth, kLineCaption)
                             .text(clockLabel(placement.startMinutes))
                             .fontSize(kFontCaption)
                             .color(colors::kMuted)
                             .build();
 
-                        // 下边：结束时间（只有真的写了结束时间才画）
+                        // 下边右：结束时间（只有真的写了结束时间才画）
                         if (placement.endMinutes)
                         {
                             ui.text(itemId + ".end")
-                                .position(20.0f, height - kLineCaption - 2.0f)
-                                .size(columnWidth - 34.0f, kLineCaption)
+                                .position(innerX, height - kLineCaption - 2.0f)
+                                .size(innerWidth, kLineCaption)
                                 .text(clockLabel(*placement.endMinutes))
                                 .fontSize(kFontCaption)
+                                .horizontalAlign(eui::HorizontalAlign::Right)
                                 .color(colors::kMuted)
                                 .build();
                         }
 
-                        // 中间：标题（只有标题）
-                        const float reserved   = placement.endMinutes ? kLineCaption + 2.0f : 2.0f;
-                        const float titleHeight = std::max(kLineBody, height - kLineCaption - 6.0f - reserved);
-
+                        // 中间：标题（按可用宽度/行数截断，保证一定落在卡片里）
                         ui.text(itemId + ".title")
-                            .position(20.0f, kLineCaption + 4.0f)
-                            .size(columnWidth - 34.0f, titleHeight)
-                            .text(app::cardTitle(*entry))
+                            .position(innerX, startRow)
+                            .size(innerWidth, titleArea)
+                            .text(app::elideToFit(app::displayTitle(*entry), innerWidth, kFontBody,
+                                                  titleLines))
                             .fontSize(kFontBody)
                             .lineHeight(kLineBody)
                             .wrap(true)
