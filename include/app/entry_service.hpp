@@ -50,4 +50,23 @@ std::expected<core::Entry, std::string> addFromText(core::Core& note, std::strin
 std::optional<core::TimeRange> occurredFromText(std::string_view text,
                                                 std::chrono::sys_seconds createdAt);
 
+/**
+ * 改内容（原文）之后，时间该怎么变。
+ *
+ * 规则（这是用户报的 bug 的直接来源）：
+ *   * 原来的时间来自**手动 / AI** → **保留**。
+ *     否则"改个错别字"或"原文只有日期"会把时间打回 0 点，手改白费。
+ *   * 原来的时间来自规则 / 未知 → 按新原文重算；算不出就清空。
+ *
+ * 想按文本重算手改过的记录：先「清除时间」（来源变 None），再保存。
+ */
+struct ContentTimeUpdate
+{
+    std::optional<core::TimeRange> occurred;
+    core::TimeSource               source = core::TimeSource::None;
+    bool                           preservedManual = false;   // true = 保留了用户设定的时间
+};
+
+ContentTimeUpdate recomputeTimeForContent(core::Entry const& original, std::string_view newText);
+
 }  // namespace app

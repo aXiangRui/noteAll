@@ -4,6 +4,7 @@
 #include <filesystem>
 #include <string>
 
+#include "app/entry_service.hpp"
 #include "core/core.hpp"
 
 // 「改一条记录的时间」在数据层到底能不能落盘。
@@ -85,4 +86,49 @@ TEST_CASE("update：把时间清空也能落盘")
     REQUIRE(reread.has_value());
     CHECK_FALSE(reread->occurred.has_value());   // ★ 真的清掉了
     CHECK(core::toString(reread->occurred_source) == std::string{"none"});
+}
+
+TEST_CASE("recomputeTimeForContent：手改/AI 的时间不被改内容覆盖")
+{
+    core::Entry entry;
+    entry.created_at = sys_days{ year{ 2026 } / 10 / 30 } + hours{ 8 };
+    entry.raw_text   = "周三读书会";                      // 只有日期 → 规则会解析成 0 点
+
+    // 用户手改成了 20:00
+    entry.occurred        = core::TimeRange{ sys_days{ year{ 2026 } / 11 / 4 } + hours{ 12 },
+                                             std::nullopt };   // UTC 12:00 = 上海 20:00
+    entry.occurred_source = core::TimeSource::Manual;
+
+    const auto kept = app::recomputeTimeForContent(entry, "周三读书会（改个错别字）");
+    CHECK(kept.preservedManual);                            // ★ 保留
+    REQUIRE(kept.occurred.has_value());
+    CHECK(kept.occurred->start == entry.occurred->start);   // 还是 20:00
+    CHECK(core::toString(kept.source) == std::string{"manual"});
+
+    // AI 来源同样保留
+    entry.occurred_source = core::TimeSource::Ai;
+    const auto keptAi = app::recomputeTimeForContent(entry, entry.raw_text);
+    CHECK(keptAi.preservedManual);
+    CHECK(keptAi.occurred->start == entry.occurred->start);
+}
+
+TEST_CASE("recomputeTimeForContent：规则来源的时间按新原文重算")
+{
+    core::Entry entry;
+    entry.created_at      = sys_days{ year{ 2026 } / 10 / 30 } + hours{ 8 };
+    entry.raw_text        = "周三读书会";
+    entry.occurred        = core::TimeRange{ sys_days{ year{ 2026 } / 11 / 4 }, std::nullopt };
+    entry.occurred_source = core::TimeSource::Rule;
+
+    // 新原文仍然只有日期 → 重算成那天 0 点（上海 11-04 00:00 = UTC 11-03 16:00）
+    const auto recalculated = app::recomputeTimeForContent(entry, "周三读书会");
+    REQUIRE(recalculated.occurred.has_value());
+    CHECK(recalculated.occurred->start == sys_days{ year{ 2026 } / 11 / 3 } + hours{ 16 });
+    CHECK(core::toString(recalculated.source) == std::string{"rule"});
+    CHECK_FALSE(recalculated.preservedManual);
+
+    // 新原文完全没有时间 → 清空
+    const auto cleared = app::recomputeTimeForContent(entry, "随手记一句，没有任何时间");
+    CHECK_FALSE(cleared.occurred.has_value());
+    CHECK(core::toString(cleared.source) == std::string{"none"});
 }

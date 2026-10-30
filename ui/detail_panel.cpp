@@ -376,30 +376,14 @@ void composeDetailPanel(eui::Ui& ui, AppState& state, const PageRect& area)
 
                       core::Entry entry = *found;
 
-                      // 时间怎么处理（这是最容易出问题的一步）：
-                      //   * 新原文能解析出时间 → 用它（来源 Rule）
-                      //   * 解析不出，但原来的时间是**用户手动 / AI 定的** → 保留
-                      //     否则"改个错别字"会把手改的时间悄悄抹掉
-                      //   * 解析不出，且原来的时间来自规则 → 清空（用户把时间删掉了）
-                      const auto reparsed = app::occurredFromText(state.editText, entry.created_at);
+                      // 时间怎么处理交给 app 层（可单测）：手改/AI 的时间优先，
+                      // 改内容不覆盖；规则来源的才按新原文重算。
+                      const app::ContentTimeUpdate timeUpdate =
+                          app::recomputeTimeForContent(entry, state.editText);
 
-                      const bool userOwnedTime =
-                          entry.occurred &&
-                          (entry.occurred_source == core::TimeSource::Manual ||
-                           entry.occurred_source == core::TimeSource::Ai);
-
-                      entry.raw_text = state.editText;
-                      if (reparsed)
-                      {
-                          entry.occurred        = reparsed;
-                          entry.occurred_source = core::TimeSource::Rule;
-                      }
-                      else if (!userOwnedTime)
-                      {
-                          entry.occurred.reset();
-                          entry.occurred_source = core::TimeSource::None;
-                      }
-                      // else：保留原来的时间和来源（改错别字不该丢时间）
+                      entry.raw_text        = state.editText;
+                      entry.occurred        = timeUpdate.occurred;
+                      entry.occurred_source = timeUpdate.source;
 
                       // 原文变了，旧标题/摘要就成了过期数据 —— 打回 pending 等重生成。
                       entry.draft_status   = core::DraftStatus::Pending;
@@ -412,6 +396,9 @@ void composeDetailPanel(eui::Ui& ui, AppState& state, const PageRect& area)
                           return;
                       }
 
+                      state.timeStatus = timeUpdate.preservedManual
+                                             ? "内容已保存；时间保持你设定的值（要按文本重算，先清除时间）"
+                                             : "内容已保存";
                       reloadData(state);
                       startDraftInBackground(entry.id, entry.raw_text);
                   });

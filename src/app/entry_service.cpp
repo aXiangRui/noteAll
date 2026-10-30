@@ -65,4 +65,30 @@ std::expected<core::Entry, std::string> addFromText(core::Core& note, std::strin
     return note.add(raw, createdAt, occurredFromText(raw, createdAt));
 }
 
+ContentTimeUpdate recomputeTimeForContent(core::Entry const& original, std::string_view newText)
+{
+    const bool userOwnedTime =
+        original.occurred && (original.occurred_source == core::TimeSource::Manual ||
+                              original.occurred_source == core::TimeSource::Ai);
+
+    if (userOwnedTime)
+    {
+        // 手改 / AI 定的时间优先：改内容不该把它打回 0 点。
+        ContentTimeUpdate keep;
+        keep.occurred        = original.occurred;
+        keep.source          = original.occurred_source;
+        keep.preservedManual = true;
+        return keep;
+    }
+
+    ContentTimeUpdate updated;
+    if (const auto reparsed = occurredFromText(newText, original.created_at))
+    {
+        updated.occurred = reparsed;
+        updated.source   = core::TimeSource::Rule;
+    }
+    // 解析不出 → 时间清空（source 保持 None）
+    return updated;
+}
+
 }  // namespace app
