@@ -15,6 +15,9 @@
 #include "app/time_input.hpp"
 #include <cstdio>
 #include "ledger/money.hpp"
+#include "import/bill.hpp"
+#include "import/charset.hpp"
+#include "import/importer.hpp"
 #include "ledger/book.hpp"
 #include "app/entry_service.hpp"
 #include "core/core.hpp"
@@ -772,6 +775,45 @@ int execute(const std::vector<std::string>& args,
             }
 
             if (shown == 0) { v.RenderMessage("这个月还没记账"); }
+            return 0;
+        }
+
+        if (sub == "import")
+        {
+            if (args.size() < 4)
+            {
+                v.RenderError("用法：note ledger import <账单文件.csv> [--commit]");
+                return 1;
+            }
+
+            const std::string path = args[3];
+            bool              commit = false;
+            for (std::size_t i = 4; i < args.size(); ++i)
+            {
+                if (args[i] == "--commit") { commit = true; }
+            }
+
+            const auto text = import::readTextFile(path);
+            if (!text) { return fail(text.error()); }
+            for (const auto& warning : text->warnings) { v.RenderError(warning); }
+
+            const auto parsed = import::parseBill(text->utf8);
+
+            std::cout << "编码 " << text->encoding << "　来源 " << import::toString(parsed.source)
+                      << "　表头第 " << parsed.headerLineNumber << " 行\n";
+
+            if (!parsed.headerLine.empty())
+            {
+                std::cout << "表头 " << parsed.headerLine.substr(0, 120) << "\n";
+            }
+
+            auto outcome = import::importBill(book, parsed, commit);
+            if (!outcome) { return fail(outcome.error()); }
+
+            std::cout << outcome->summary() << (commit ? "（已写入）" : "（预览：加 --commit 才写入）")
+                      << '\n';
+
+            for (const auto& note : outcome->notes) { std::cout << "  · " << note << '\n'; }
             return 0;
         }
 

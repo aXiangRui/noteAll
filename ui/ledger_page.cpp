@@ -15,6 +15,10 @@
 
 #include "app/entry_service.hpp"
 #include "app/time_input.hpp"
+#include "import/charset.hpp"
+#include "import/importer.hpp"
+#include "import/charset.hpp"
+#include "import/importer.hpp"
 #include "ledger/book.hpp"
 #include "ledger/money.hpp"
 
@@ -311,6 +315,171 @@ void composeLedgerForm(eui::Ui& ui, AppState& state, const PageRect& area)
 
 }  // namespace
 
+/** 「导入账单」面板：读文件 → 预览（不写盘）→ 确认导入。 */
+void composeLedgerImportPanel(eui::Ui& ui, AppState& state, const PageRect& area)
+{
+    ui.rect("ledger.import.scrim")
+        .position(area.x, area.y).size(area.width, area.height)
+        .radius(14.0f).color({ 0.96f, 0.97f, 0.98f, 0.82f })
+        .build();
+
+    const float panelW = std::min(680.0f, area.width - 40.0f);
+    const float panelH = 300.0f;
+    const float panelX = area.x + (area.width - panelW) * 0.5f;
+    const float panelY = area.y + 40.0f;
+    const float pad    = 18.0f;
+    const float innerW = panelW - pad * 2.0f;
+
+    ui.rect("ledger.import.bg")
+        .position(panelX, panelY).size(panelW, panelH)
+        .radius(16.0f).color(colors::kColumnBg).border(1.0f, colors::kCardBorder).build();
+
+    ui.text("ledger.import.title")
+        .position(panelX + pad, panelY + 14.0f).size(innerW, kLineBody)
+        .text("导入账单").fontSize(kFontBody).color(colors::kKindEvent).build();
+
+    ui.text("ledger.import.hint")
+        .position(panelX + pad, panelY + 42.0f).size(innerW, kLineCaption)
+        .text("支持微信 / 支付宝导出的 CSV（UTF-8、GBK 都能读）；先预览，确认后才写账本")
+        .fontSize(kFontCaption).color(colors::kMuted).build();
+
+    components::input(ui, "ledger.import.path")
+        .position(panelX + pad, panelY + 68.0f).size(innerW, 40.0f)
+        .fontSize(kFontBody)
+        .placeholder("C:\\Users\\你\\Downloads\\微信支付账单.csv")
+        .value(state.ledgerImportPath)
+        .onChange([&state](const std::string& value) {
+            state.ledgerImportPath = value;
+            state.ledgerImportReady = false;   // 路径变了，旧预览作废
+            repaint();
+        })
+        .build();
+
+    // ---- 读取预览 ----
+    composeToggle(ui, "ledger.import.read", panelX + pad, panelY + 116.0f, 120.0f, "读取预览",
+                  false, [&state] {
+                      state.ledgerImportError.clear();
+                      state.ledgerImportInfo.clear();
+                      state.ledgerImportNotes.clear();
+                      state.ledgerImportReady = false;
+
+                      if (state.ledgerImportPath.empty())
+                      {
+                          state.ledgerImportError = "先填文件路径";
+                          return;
+                      }
+
+                      const auto text = import::readTextFile(state.ledgerImportPath);
+                      if (!text)
+                      {
+                          state.ledgerImportError = text.error();
+                          return;
+                      }
+
+                      auto parsed = import::parseBill(text->utf8);
+
+                      ledger::Book book{ ledgerFilePath() };
+                      if (auto loaded = book.load(); !loaded)
+                      {
+                          state.ledgerImportError = "读取账本失败: " + loaded.error();
+                          return;
+                      }
+
+                      auto preview = import::importBill(book, parsed, false);
+                      if (!preview)
+                      {
+                          state.ledgerImportError = preview.error();
+                          return;
+                      }
+
+                      state.ledgerImportInfo = "编码 " + text->encoding + "　来源 " +
+                                               import::toString(parsed.source) +
+                                               (parsed.headerLineNumber > 0
+                                                    ? "　表头第 " +
+                                                          std::to_string(parsed.headerLineNumber) +
+                                                          " 行"
+                                                    : "") +
+                                               "　" + preview->summary();
+
+                      state.ledgerImportNotes = parsed.skipped;
+                      state.ledgerImportParsed = std::move(parsed);
+                      state.ledgerImportReady  = !state.ledgerImportParsed.rows.empty();
+
+                      if (!state.ledgerImportReady && state.ledgerImportError.empty())
+                      {
+                          state.ledgerImportError = "这个文件里没有可导入的记录";
+                      }
+                      repaint();
+                  });
+
+    // ---- 预览信息 ----
+    float infoY = panelY + 160.0f;
+
+    if (!state.ledgerImportInfo.empty())
+    {
+        ui.text("ledger.import.info")
+            .position(panelX + pad, infoY).size(innerW, kLineCaption)
+            .text(state.ledgerImportInfo).fontSize(kFontCaption).color(colors::kText).build();
+        infoY += kLineCaption + 4.0f;
+    }
+
+    for (std::size_t i = 0; i < state.ledgerImportNotes.size() && i < 3; ++i)
+    {
+        ui.text("ledger.import.note." + std::to_string(i))
+            .position(panelX + pad + 12.0f, infoY).size(innerW - 12.0f, kLineCaption)
+            .text(app::elideToFit("· " + state.ledgerImportNotes[i], innerW - 12.0f, kFontCaption, 1))
+            .fontSize(kFontCaption).color(colors::kMuted).build();
+        infoY += kLineCaption;
+    }
+
+    if (!state.ledgerImportError.empty())
+    {
+        ui.text("ledger.import.error")
+            .position(panelX + pad, infoY).size(innerW, kLineCaption)
+            .text(app::elideToFit(state.ledgerImportError, innerW, kFontCaption, 1))
+            .fontSize(kFontCaption).color(colors::kDanger).build();
+    }
+
+    // ---- 按钮 ----
+    const float buttonsY = panelY + panelH - 56.0f;
+    const float buttonW  = 120.0f;
+
+    composeToggle(ui, "ledger.import.cancel", panelX + panelW - pad - buttonW, buttonsY, buttonW,
+                  "取消", false, [&state] {
+                      state.ledgerImportOpen  = false;
+                      state.ledgerImportReady = false;
+                      state.ledgerImportError.clear();
+                  });
+
+    composeToggle(ui, "ledger.import.ok", panelX + panelW - pad * 2.0f - buttonW * 2.0f, buttonsY,
+                  buttonW, "确认导入", true, [&state] {
+                      if (!state.ledgerImportReady) { return; }
+
+                      ledger::Book book{ ledgerFilePath() };
+                      if (auto loaded = book.load(); !loaded)
+                      {
+                          state.ledgerImportError = "读取账本失败: " + loaded.error();
+                          return;
+                      }
+
+                      auto outcome = import::importBill(book, state.ledgerImportParsed, true);
+                      if (!outcome)
+                      {
+                          state.ledgerImportError = outcome.error();
+                          return;
+                      }
+
+                      state.ledgerNotice      = "导入完成：" + outcome->summary();
+                      state.ledgerImportOpen  = false;
+                      state.ledgerImportReady = false;
+                      state.ledgerImportInfo.clear();
+                      state.ledgerImportNotes.clear();
+                      state.ledgerImportParsed = {};
+
+                      reloadLedger(state);
+                      repaint();
+                  });
+}
 void composeLedgerPage(eui::Ui& ui, AppState& state, const PageRect& area)
 {
     if (!state.ledgerLoaded) { reloadLedger(state); }
@@ -345,6 +514,12 @@ void composeLedgerPage(eui::Ui& ui, AppState& state, const PageRect& area)
         .fontSize(kFontRange)
         .color(colors::kText)
         .build();
+
+    composeChip(ui, "ledger.import", area.x + area.width - 244.0f, y0, 116.0f, "导入账单", [&state] {
+        state.ledgerImportOpen  = true;
+        state.ledgerImportError.clear();
+        state.ledgerImportReady = false;
+    });
 
     composeChip(ui, "ledger.add", area.x + area.width - 116.0f, y0, 116.0f, "＋ 记账", [&state] {
         state.ledgerComposing = true;
@@ -473,7 +648,17 @@ void composeLedgerPage(eui::Ui& ui, AppState& state, const PageRect& area)
             .fontSize(kFontCaption).color(colors::kMuted).build();
     }
 
+    // 导入完成的结果提示（一次性）
+    if (!state.ledgerNotice.empty())
+    {
+        ui.text("ledger.notice")
+            .position(area.x, area.y + area.height - kLineCaption)
+            .size(area.width, kLineCaption)
+            .text(state.ledgerNotice).fontSize(kFontCaption).color(colors::kKindNote).build();
+    }
+
     if (state.ledgerComposing) { composeLedgerForm(ui, state, area); }
+    if (state.ledgerImportOpen) { composeLedgerImportPanel(ui, state, area); }
 
     if (!state.ledgerError.empty())
     {

@@ -112,8 +112,13 @@ target_link_libraries(app PUBLIC core parse)
 # 都不在这里 —— 那些是适配层的事，将来换 CSV 库也只改这一个文件。
 # ---------------------------------------------------------------------------
 add_library(import
-    src/import/csv.cpp)
+    src/import/bill.cpp
+    src/import/charset.cpp
+    src/import/csv.cpp
+    src/import/importer.cpp)
 target_include_directories(import PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
+# 账单行要转成 ledger::Transaction 的原料（金额解析也复用 ledger::parseCents）
+target_link_libraries(import PUBLIC ledger)
 
 # ---------------------------------------------------------------------------
 # ledger —— 记账（流水）
@@ -185,7 +190,7 @@ endif()
 # flow / workflow 已移到 labs/（零用户，详见 labs/README.md）。
 # ---------------------------------------------------------------------------
 add_executable(note main.cpp)
-target_link_libraries(note PRIVATE core view parse app ledger)
+target_link_libraries(note PRIVATE core view parse app ledger import)
 
 # 草稿功能需要 llm 层（Windows-only）。没它 note 其余功能照常。
 if(TARGET llm)
@@ -254,7 +259,7 @@ if(EXISTS "${EUI_NEO_DIR}/CMakeLists.txt")
     target_include_directories(note_gui PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/ui)
     # app 库：dataPath() + 周视图数据准备（纯函数，见 include/app/calendar.hpp）
     # llm：新增记录后要在后台生成草稿（draft_runner）
-    target_link_libraries(note_gui PRIVATE app core llm ledger)
+    target_link_libraries(note_gui PRIVATE app core llm ledger import)
     eui_neo_configure_app(note_gui)
 
     # 我们自己的界面资源（字体等）拷到 exe 旁边。

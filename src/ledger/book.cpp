@@ -61,7 +61,8 @@ std::expected<Transaction, std::string> Book::add(std::int64_t             amoun
                                                   std::chrono::sys_seconds occurred,
                                                   std::string              category,
                                                   std::string              note,
-                                                  std::chrono::sys_seconds createdAt)
+                                                  std::chrono::sys_seconds createdAt,
+                                                  std::string              externalId)
 {
     if (amountCents <= 0) { return std::unexpected("金额必须大于 0"); }
 
@@ -83,6 +84,7 @@ std::expected<Transaction, std::string> Book::add(std::int64_t             amoun
     t.category    = category.empty() ? "其他" : std::move(category);
     t.note        = std::move(note);
     t.created_at  = createdAt;
+    t.external_id = std::move(externalId);
 
     const auto before = all_;
     all_.push_back(t);

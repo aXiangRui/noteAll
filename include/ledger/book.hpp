@@ -48,7 +48,8 @@ public:
                                                 std::chrono::sys_seconds  occurred,
                                                 std::string               category,
                                                 std::string               note,
-                                                std::chrono::sys_seconds  createdAt);
+                                                std::chrono::sys_seconds  createdAt,
+                                                std::string               externalId = {});
 
     std::expected<void, std::string> remove(
         std::string_view                        id,

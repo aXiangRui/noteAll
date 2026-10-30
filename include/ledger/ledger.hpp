@@ -34,6 +34,11 @@ struct Transaction
     std::string              note;                            // 备注（原文去掉金额）
     std::chrono::sys_seconds created_at{};                    // 记录时刻（UTC）
     std::optional<std::chrono::sys_seconds> deleted_at;       // 软删除，和 note 一致
+
+    // 外部交易号（账单里的「交易单号 / 交易号」）。
+    // 导入去重全靠它：同一个账单导两次不能翻倍，而"时间+金额"撞车的概率并不低。
+    // 手工记的账为空。
+    std::string              external_id;
 };
 
 /** 预置分类（支出）。收入另有一小张表。 */

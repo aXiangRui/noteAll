@@ -6,6 +6,7 @@
 
 #include "app/calendar.hpp"
 #include "core/entry.hpp"
+#include "import/bill.hpp"
 #include "ledger/ledger.hpp"
 #include "eui_neo.h"
 
@@ -64,6 +65,16 @@ struct AppState
     bool                             ledgerIncome = false;
     std::string                      ledgerCategory;  // 空 = 自动猜
     std::string                      ledgerFormError;
+
+    // 「导入账单」面板
+    bool                             ledgerImportOpen = false;
+    std::string                      ledgerImportPath;
+    bool                             ledgerImportReady = false;   // 已经读过并解析成功
+    std::string                      ledgerImportInfo;            // 「编码 utf-8　来源 微信 …」
+    std::vector<std::string>         ledgerImportNotes;           // 跳过原因（前几条）
+    std::string                      ledgerImportError;
+    import::BillParseResult          ledgerImportParsed;          // 待确认导入的数据
+    std::string                      ledgerNotice;                 // 导入完成后的一句结果
 };
 
 /**

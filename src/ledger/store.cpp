@@ -42,6 +42,7 @@ json toJson(Transaction const& t)
         { "category",     t.category },
         { "note",         t.note },
         { "created_at",   toIsoUtc(t.created_at) },
+        { "external_id",  t.external_id },
     };
 
     if (t.deleted_at) { j["deleted_at"] = toIsoUtc(*t.deleted_at); }
@@ -58,6 +59,7 @@ std::optional<Transaction> fromJson(json const& j)
     t.direction   = directionFromString(j.value("direction", std::string{ "expense" }));
     t.category    = j.value("category", std::string{ "其他" });
     t.note        = j.value("note", std::string{});
+    t.external_id = j.value("external_id", std::string{});
     if (t.id.empty() || t.amountCents <= 0) { return std::nullopt; }
 
     const auto occurred = fromIsoUtc(j.value("occurred", std::string{}));
