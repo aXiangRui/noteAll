@@ -37,7 +37,7 @@ void composeButton(eui::Ui& ui, const std::string& id, float x, float y, float w
     ui.stack(id)
         .position(x, y)
         .size(width, kButtonHeight)
-        .onClick(std::move(onClick))
+        .onClick([onClick = std::move(onClick)] { repaint(); onClick(); })
         .content([&] {
             ui.rect(id + ".bg")
                 .position(0.0f, 0.0f).size(width, kButtonHeight).radius(10.0f)

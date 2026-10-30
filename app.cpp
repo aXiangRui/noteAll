@@ -78,8 +78,11 @@ const DslAppConfig& dslAppConfig() {
 void compose(eui::Ui& ui, const eui::Screen& screen) {
     ensureLoaded(state);
 
-    // 每帧检查后台草稿有没有回来（回来就写盘 + 刷新）
-    pollDraftResult(state);
+    // 检查后台草稿有没有回来（回来就写盘 + 刷新）
+    if (pollDraftResult(state)) { repaint(); }
+
+    // 有任务在跑就持续请求下一帧 —— 否则没人轮询，结果永远不落地
+    if (draftBusy()) { repaint(); }
 
     // 页面底：银白
     ui.rect("page.bg")

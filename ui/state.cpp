@@ -1,5 +1,7 @@
 #include "app_state.hpp"
 
+#include "eui/app.h"
+
 #include <cstdlib>
 #include <filesystem>
 
@@ -8,6 +10,11 @@
 
 namespace app
 {
+
+void repaint()
+{
+    requestUpdate();   // 框架的 ::app::requestUpdate —— 和我们的 namespace app 是同一个
+}
 
 std::chrono::year_month_day todayLocal()
 {
@@ -36,6 +43,7 @@ void reloadData(AppState& state)
         state.error += warning + "\n";
     }
     state.loaded = true;
+    repaint();
 }
 
 void ensureLoaded(AppState& state)

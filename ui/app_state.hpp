@@ -50,6 +50,16 @@ struct AppState
     bool                      loaded = false;
 };
 
+/**
+ * 请求下一帧重绘。
+ *
+ * 为什么必须有这个东西：EUI 是**保留模式** —— compose() 只在"有输入事件 /
+ * 尺寸变化 / 显式请求"时才跑（dsl_window_runtime.h:72）。我们在点击回调里
+ * 改了 state，如果不主动请求，界面要等下一次鼠标动才更新 ——
+ * 表现就是"点了没反应""要再点一下才生效"。
+ */
+void repaint();
+
 /** 本地"今天"（按本地时区，不是 UTC）。 */
 std::chrono::year_month_day todayLocal();
 

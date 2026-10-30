@@ -78,6 +78,7 @@ DetailSeed seedFor(core::Entry const& entry)
 
 void applySeed(AppState& state, DetailSeed const& seed)
 {
+    repaint();
     state.selectedId = seed.id;
     state.editText   = seed.text;
     state.editStart  = seed.start;
@@ -94,7 +95,7 @@ void composeChip(eui::Ui& ui, const std::string& id, float x, float y, float wid
     ui.stack(id)
         .position(x, y)
         .size(width, kChipHeight)
-        .onClick(std::move(onClick))
+        .onClick([onClick = std::move(onClick)] { repaint(); onClick(); })
         .content([&] {
             ui.rect(id + ".bg")
                 .position(0.0f, 0.0f)
@@ -177,7 +178,10 @@ void composeTopBar(eui::Ui& ui, AppState& state, const PageRect& area)
         .fontSize(kFontCaption)
         .placeholder("搜索：原文 / 标题 / 标签")
         .value(state.searchText)
-        .onChange([&state](const std::string& value) { state.searchText = value; })
+        .onChange([&state](const std::string& value) {
+            state.searchText = value;
+            repaint();
+        })
         .build();
 }
 
