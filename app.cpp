@@ -117,11 +117,13 @@ void compose(eui::Ui& ui, const eui::Screen& screen) {
     // 模块列表 —— 预留：月视图 / 搜索 / 复习计划 / 导入 都往这下面加
     const float firstItemY = 96.0f;
     composeSidebarItem(ui, "nav.week", firstItemY, "周视图", Page::Week);
-    composeSidebarItem(ui, "nav.settings", firstItemY + kSidebarItemHeight + 8.0f, "设置",
+    composeSidebarItem(ui, "nav.ledger", firstItemY + kSidebarItemHeight + 8.0f, "账本",
+                       Page::Ledger);
+    composeSidebarItem(ui, "nav.settings", firstItemY + (kSidebarItemHeight + 8.0f) * 2.0f, "设置",
                        Page::Settings);
 
     ui.text("sidebar.reserved")
-        .position(kSidebarPad, firstItemY + (kSidebarItemHeight + 8.0f) * 2.0f + 12.0f)
+        .position(kSidebarPad, firstItemY + (kSidebarItemHeight + 8.0f) * 3.0f + 12.0f)
         .size(kSidebarWidth - kSidebarPad * 2.0f, metrics::kLineCaption)
         .text("（更多模块预留）")
         .fontSize(metrics::kFontCaption)
@@ -139,6 +141,9 @@ void compose(eui::Ui& ui, const eui::Screen& screen) {
     switch (state.page) {
         case Page::Week:
             composeWeekPage(ui, state, content);
+            break;
+        case Page::Ledger:
+            composeLedgerPage(ui, state, content);
             break;
         case Page::Settings:
             composeSettingsPage(ui, state, content);

@@ -6,6 +6,7 @@
 
 #include "app/calendar.hpp"
 #include "core/entry.hpp"
+#include "ledger/ledger.hpp"
 #include "eui_neo.h"
 
 // GUI 的共享状态与配色。
@@ -20,6 +21,7 @@ namespace app
 enum class Page
 {
     Week,        // 周视图（当前默认）
+    Ledger,      // 账本（记账流水）
     Settings,    // 设置
 };
 
@@ -48,6 +50,12 @@ struct AppState
     std::string               aiStart;    // AI 建议的时间（用于判断是否采纳）
     std::string               aiEnd;
     bool                      loaded = false;
+
+    // ---- 账本 ----
+    std::vector<ledger::Transaction> ledgerEntries;   // 可见流水（不含软删除）
+    std::chrono::year_month          ledgerMonth{};   // 当前看的月份
+    std::string                      ledgerError;
+    bool                             ledgerLoaded = false;
 };
 
 /**
@@ -71,6 +79,9 @@ void reloadData(AppState& state);
 
 /** 有没有可用的模型 key：环境变量 > 数据目录/note.key > %APPDATA%/noteAll/note.key */
 bool llmKeyConfigured();
+
+/** 读账本（ledger.jsonl）。账本和笔记是两个文件，各读各的。 */
+void reloadLedger(AppState& state);
 
 /** 还有多少条欠草稿（draft_status == Pending）。 */
 std::size_t pendingDraftCount(AppState const& state);

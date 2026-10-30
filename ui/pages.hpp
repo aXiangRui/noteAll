@@ -26,6 +26,9 @@ void composeSidebar(eui::Ui& ui, AppState& state, const PageRect& area);
 // 模块：周视图（默认）
 void composeWeekPage(eui::Ui& ui, AppState& state, const PageRect& area);
 
+// 模块：账本（记账流水列表）
+void composeLedgerPage(eui::Ui& ui, AppState& state, const PageRect& area);
+
 // 模块：设置
 void composeSettingsPage(eui::Ui& ui, AppState& state, const PageRect& area);
 

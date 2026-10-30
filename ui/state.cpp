@@ -7,6 +7,8 @@
 
 #include "app/api_key.hpp"
 #include "core/core.hpp"
+#include "app/entry_service.hpp"
+#include "ledger/book.hpp"
 
 namespace app
 {
@@ -87,6 +89,41 @@ core::Entry const* firstPendingDraft(AppState const& state)
         }
     }
     return nullptr;
+}
+
+// 账本文件的路径规则：和笔记文件同目录，固定叫 ledger.jsonl。
+std::filesystem::path ledgerPath()
+{
+    const auto dataFile = dataPath();
+    const auto dir = dataFile.has_parent_path() ? dataFile.parent_path() : std::filesystem::path{ "." };
+    return dir / "ledger.jsonl";
+}
+
+void reloadLedger(AppState& state)
+{
+    state.ledgerError.clear();
+    state.ledgerEntries.clear();
+
+    ledger::Book book{ ledgerPath() };
+    if (auto loaded = book.load(); !loaded)
+    {
+        state.ledgerError = "读取账本失败: " + loaded.error();
+        state.ledgerLoaded = true;
+        return;
+    }
+
+    state.ledgerEntries = book.list();   // 只看可见的（软删除的留在文件里）
+    for (const auto& warning : book.warnings()) { state.ledgerError += warning + "\n"; }
+
+    if (state.ledgerMonth == std::chrono::year_month{})
+    {
+        const std::chrono::zoned_time     zt{ std::chrono::current_zone(), nowUtc() };
+        const std::chrono::year_month_day today{
+            std::chrono::floor<std::chrono::days>(zt.get_local_time()) };
+        state.ledgerMonth = std::chrono::year_month{ today.year(), today.month() };
+    }
+
+    state.ledgerLoaded = true;
 }
 
 }  // namespace app

@@ -235,6 +235,7 @@ if(EXISTS "${EUI_NEO_DIR}/CMakeLists.txt")
         app.cpp
         ui/state.cpp
         ui/week_page.cpp
+        ui/ledger_page.cpp
         ui/settings_page.cpp
         ui/detail_panel.cpp
         ui/compose_panel.cpp
@@ -243,7 +244,7 @@ if(EXISTS "${EUI_NEO_DIR}/CMakeLists.txt")
     target_include_directories(note_gui PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/ui)
     # app 库：dataPath() + 周视图数据准备（纯函数，见 include/app/calendar.hpp）
     # llm：新增记录后要在后台生成草稿（draft_runner）
-    target_link_libraries(note_gui PRIVATE app core llm)
+    target_link_libraries(note_gui PRIVATE app core llm ledger)
     eui_neo_configure_app(note_gui)
 
     # 我们自己的界面资源（字体等）拷到 exe 旁边。
