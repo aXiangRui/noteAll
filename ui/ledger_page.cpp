@@ -15,6 +15,7 @@
 
 #include "app/entry_service.hpp"
 #include "app/time_input.hpp"
+#include "ledger/book.hpp"
 #include "ledger/money.hpp"
 
 namespace app
@@ -118,6 +119,198 @@ void composeSummary(eui::Ui& ui, AppState& state, const PageRect& area, float y,
 
 }  // namespace
 
+namespace
+{
+
+/** 方向/分类的小胶囊（可选中）。 */
+void composeToggle(eui::Ui& ui, const std::string& id, float x, float y, float width,
+                   const std::string& label, bool selected, std::function<void()> onClick)
+{
+    const float height = 32.0f;
+
+    ui.stack(id)
+        .position(x, y)
+        .size(width, height)
+        .onClick([onClick = std::move(onClick)] { repaint(); onClick(); })
+        .content([&] {
+            ui.rect(id + ".bg")
+                .position(0.0f, 0.0f).size(width, height).radius(8.0f)
+                .color(selected ? colors::kAccent : colors::kPageBg)
+                .border(1.0f, colors::kCardBorder).build();
+            ui.text(id + ".label")
+                .position(0.0f, 5.0f).size(width, kLineCaption)
+                .text(label).fontSize(kFontCaption)
+                .horizontalAlign(eui::HorizontalAlign::Center)
+                .color(colors::kText).build();
+        })
+        .build();
+}
+
+/** 「+ 记账」面板：一句话搞定，其余都能覆盖。 */
+void composeLedgerForm(eui::Ui& ui, AppState& state, const PageRect& area)
+{
+    // 遮罩
+    ui.rect("ledger.form.scrim")
+        .position(area.x, area.y).size(area.width, area.height)
+        .radius(14.0f).color({ 0.96f, 0.97f, 0.98f, 0.82f })
+        .build();
+
+    const float panelW = std::min(620.0f, area.width - 40.0f);
+    const float panelH = 336.0f;
+    const float panelX = area.x + (area.width - panelW) * 0.5f;
+    const float panelY = area.y + 40.0f;
+    const float pad    = 18.0f;
+    const float innerW = panelW - pad * 2.0f;
+
+    ui.rect("ledger.form.bg")
+        .position(panelX, panelY).size(panelW, panelH)
+        .radius(16.0f).color(colors::kColumnBg).border(1.0f, colors::kCardBorder).build();
+
+    ui.text("ledger.form.title")
+        .position(panelX + pad, panelY + 14.0f).size(innerW, kLineBody)
+        .text("记一笔").fontSize(kFontBody).color(colors::kKindEvent).build();
+
+    ui.text("ledger.form.hint")
+        .position(panelX + pad, panelY + 42.0f).size(innerW, kLineCaption)
+        .text("一句话就行：金额写在句末（午饭 32 / 打车12块 / 工资 8000）")
+        .fontSize(kFontCaption).color(colors::kMuted).build();
+
+    components::input(ui, "ledger.form.text")
+        .position(panelX + pad, panelY + 68.0f).size(innerW, 40.0f)
+        .fontSize(kFontBody)
+        .placeholder("午饭 32")
+        .value(state.ledgerText)
+        .onChange([&state](const std::string& value) {
+            state.ledgerText = value;
+            repaint();
+        })
+        .build();
+
+    // 方向
+    const float dirY = panelY + 120.0f;
+    composeToggle(ui, "ledger.form.expense", panelX + pad, dirY, 88.0f, "支出",
+                  !state.ledgerIncome, [&state] { state.ledgerIncome = false; });
+    composeToggle(ui, "ledger.form.income", panelX + pad + 96.0f, dirY, 88.0f, "收入",
+                  state.ledgerIncome, [&state] { state.ledgerIncome = true; });
+
+    // 分类（自动 + 前几个常用）
+    const auto categories = state.ledgerIncome ? ledger::incomeCategories()
+                                               : ledger::expenseCategories();
+
+    float chipX = panelX + pad + 200.0f;
+    composeToggle(ui, "ledger.form.cat.auto", chipX, dirY, 68.0f, "自动",
+                  state.ledgerCategory.empty(), [&state] { state.ledgerCategory.clear(); });
+
+    chipX += 76.0f;
+    const float rightEdge = panelX + panelW - pad;
+    for (const auto& category : categories)
+    {
+        const float chipWidth = 76.0f;
+        if (chipX + chipWidth > rightEdge) { break; }
+
+        composeToggle(ui, "ledger.form.cat." + category, chipX, dirY, chipWidth, category,
+                      state.ledgerCategory == category,
+                      [&state, category] { state.ledgerCategory = category; });
+        chipX += chipWidth + 8.0f;
+    }
+
+    // 时间（可空）
+    ui.text("ledger.form.at.label")
+        .position(panelX + pad, panelY + 164.0f).size(innerW, kLineCaption)
+        .text("时间（留空 = 现在；格式 2026-10-30 12:00）")
+        .fontSize(kFontCaption).color(colors::kMuted).build();
+
+    components::input(ui, "ledger.form.at")
+        .position(panelX + pad, panelY + 188.0f).size(innerW, 40.0f)
+        .fontSize(kFontBody)
+        .placeholder("现在")
+        .value(state.ledgerAt)
+        .onChange([&state](const std::string& value) {
+            state.ledgerAt = value;
+            repaint();
+        })
+        .build();
+
+    // 错误
+    if (!state.ledgerFormError.empty())
+    {
+        ui.text("ledger.form.error")
+            .position(panelX + pad, panelY + 236.0f).size(innerW, kLineCaption)
+            .text(state.ledgerFormError).fontSize(kFontCaption).color(colors::kDanger).build();
+    }
+
+    // 按钮
+    const float buttonsY = panelY + panelH - 56.0f;
+    const float buttonW  = 120.0f;
+
+    composeToggle(ui, "ledger.form.cancel", panelX + panelW - pad - buttonW, buttonsY, buttonW,
+                  "取消", false, [&state] {
+                      state.ledgerComposing = false;
+                      state.ledgerFormError.clear();
+                  });
+
+    composeToggle(ui, "ledger.form.ok", panelX + panelW - pad * 2.0f - buttonW * 2.0f, buttonsY,
+                  buttonW, "确认", true, [&state] {
+                      if (state.ledgerText.empty())
+                      {
+                          state.ledgerFormError = "先写一句，比如「午饭 32」";
+                          return;
+                      }
+
+                      const auto parsed = ledger::parseAmountNote(state.ledgerText);
+                      if (!parsed)
+                      {
+                          state.ledgerFormError = "没找到金额：金额写在句末，比如「午饭 32」";
+                          return;
+                      }
+
+                      const auto direction = state.ledgerIncome ? ledger::Direction::Income
+                                                                 : ledger::guessDirection(parsed->note);
+                      const std::string category =
+                          state.ledgerCategory.empty() ? ledger::guessCategory(parsed->note, direction)
+                                                       : state.ledgerCategory;
+
+                      std::optional<std::chrono::sys_seconds> occurred = nowUtc();
+                      if (!state.ledgerAt.empty())
+                      {
+                          occurred = parseLocalDateTime(state.ledgerAt, nowUtc());
+                          if (!occurred)
+                          {
+                              state.ledgerFormError = "时间看不懂，格式 2026-10-30 12:00";
+                              return;
+                          }
+                      }
+
+                      const auto file = ledgerFilePath();
+                      ledger::Book book{ file };
+                      if (auto loaded = book.load(); !loaded)
+                      {
+                          state.ledgerFormError = "读取账本失败: " + loaded.error();
+                          return;
+                      }
+
+                      if (auto added = book.add(parsed->amountCents, direction, *occurred, category,
+                                                parsed->note, nowUtc());
+                          !added)
+                      {
+                          state.ledgerFormError = "记账失败: " + added.error();
+                          return;
+                      }
+
+                      state.ledgerText.clear();
+                      state.ledgerAt.clear();
+                      state.ledgerCategory.clear();
+                      state.ledgerIncome     = false;
+                      state.ledgerFormError.clear();
+                      state.ledgerComposing  = false;
+
+                      reloadLedger(state);
+                      repaint();
+                  });
+}
+
+}  // namespace
+
 void composeLedgerPage(eui::Ui& ui, AppState& state, const PageRect& area)
 {
     if (!state.ledgerLoaded) { reloadLedger(state); }
@@ -153,9 +346,14 @@ void composeLedgerPage(eui::Ui& ui, AppState& state, const PageRect& area)
         .color(colors::kText)
         .build();
 
+    composeChip(ui, "ledger.add", area.x + area.width - 116.0f, y0, 116.0f, "＋ 记账", [&state] {
+        state.ledgerComposing = true;
+        state.ledgerFormError.clear();
+    });
+
     ui.text("ledger.file")
-        .position(area.x + area.width - 320.0f, y0 + 10.0f)
-        .size(320.0f, kLineCaption)
+        .position(area.x + area.width - 470.0f, y0 + 10.0f)
+        .size(340.0f, kLineCaption)
         .text("账本: " + std::string{ "ledger.jsonl" })
         .fontSize(kFontCaption)
         .color(colors::kMuted)
@@ -274,6 +472,8 @@ void composeLedgerPage(eui::Ui& ui, AppState& state, const PageRect& area)
             .text("…还有 " + std::to_string(rows.size() - shown) + " 笔没显示（窗口再大点）")
             .fontSize(kFontCaption).color(colors::kMuted).build();
     }
+
+    if (state.ledgerComposing) { composeLedgerForm(ui, state, area); }
 
     if (!state.ledgerError.empty())
     {

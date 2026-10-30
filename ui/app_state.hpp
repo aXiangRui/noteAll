@@ -56,6 +56,14 @@ struct AppState
     std::chrono::year_month          ledgerMonth{};   // 当前看的月份
     std::string                      ledgerError;
     bool                             ledgerLoaded = false;
+
+    // 「+ 记账」面板（录入）
+    bool                             ledgerComposing = false;
+    std::string                      ledgerText;      // "午饭 32"
+    std::string                      ledgerAt;        // 可空 = 现在
+    bool                             ledgerIncome = false;
+    std::string                      ledgerCategory;  // 空 = 自动猜
+    std::string                      ledgerFormError;
 };
 
 /**
@@ -82,6 +90,9 @@ bool llmKeyConfigured();
 
 /** 读账本（ledger.jsonl）。账本和笔记是两个文件，各读各的。 */
 void reloadLedger(AppState& state);
+
+/** 账本文件路径（和笔记同目录，固定 ledger.jsonl）。 */
+std::filesystem::path ledgerFilePath();
 
 /** 还有多少条欠草稿（draft_status == Pending）。 */
 std::size_t pendingDraftCount(AppState const& state);

@@ -99,6 +99,11 @@ std::filesystem::path ledgerPath()
     return dir / "ledger.jsonl";
 }
 
+std::filesystem::path ledgerFilePath()
+{
+    return ledgerPath();
+}
+
 void reloadLedger(AppState& state)
 {
     state.ledgerError.clear();
