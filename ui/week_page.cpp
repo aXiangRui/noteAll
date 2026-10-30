@@ -36,13 +36,56 @@ constexpr float kColumnPad = 10.0f;
 constexpr float kHeaderHeight = 62.0f;
 constexpr float kGutterWidth = 58.0f;
 constexpr float kGutterGap = 6.0f;
-constexpr float kUnplacedHeight = 54.0f;
+constexpr float kUnplacedRowHeight = 28.0f;
+constexpr float kUnplacedMaxRows = 4.0f;   // 最多铺几行，多了就 "…还有 N 条"
+constexpr float kUnplacedHeader = 22.0f;
 
 // 卡片最小高度：只为了让 18px 时刻 + 20px 标题放得下。
 // 它**不是**默认时长 —— 时长永远来自 end - start。
 constexpr float kMinCardHeight = 64.0f;
 constexpr float kCardGapNudge = 4.0f;
 constexpr float kMinutesPerDay = 1440.0f;
+
+/**
+ * 打开详情所需的一切，**按值**拷好。
+ *
+ * 为什么不在 lambda 里捕获 entry 指针：compose 里拿到的指针指向 state.entries，
+ * 而 reloadData() 会重新赋值这个 vector —— 点击发生在之后的帧里，指针可能已经悬空。
+ * 按值拷贝是唯一安全的做法。
+ */
+struct DetailSeed
+{
+    std::string id;
+    std::string text;
+    std::string start;
+    std::string end;
+};
+
+DetailSeed seedFor(core::Entry const& entry)
+{
+    const auto* tz = std::chrono::current_zone();
+
+    DetailSeed seed;
+    seed.id   = entry.id;
+    seed.text = entry.raw_text;
+    if (entry.occurred)
+    {
+        seed.start = app::formatLocalDateTime(entry.occurred->start, *tz);
+        if (entry.occurred->end) { seed.end = app::formatLocalDateTime(*entry.occurred->end, *tz); }
+    }
+    return seed;
+}
+
+void applySeed(AppState& state, DetailSeed const& seed)
+{
+    state.selectedId = seed.id;
+    state.editText   = seed.text;
+    state.editStart  = seed.start;
+    state.editEnd    = seed.end;
+    state.aiStart.clear();   // 换了一条记录，旧的 AI 建议不再适用
+    state.aiEnd.clear();
+    state.timeError.clear();
+}
 
 void composeChip(eui::Ui& ui, const std::string& id, float x, float y, float width,
                  const std::string& label, std::function<void()> onClick)
@@ -255,23 +298,7 @@ void composeDayColumn(eui::Ui& ui, AppState& state, const DayColumn& column, int
                 ui.stack(itemId)
                     .position(6.0f, y)
                     .size(columnWidth - 12.0f, height)
-                    .onClick([&state, entryId = entry->id, raw = entry->raw_text,
-                              startText = entry->occurred
-                                              ? app::formatLocalDateTime(
-                                                    entry->occurred->start,
-                                                    *std::chrono::current_zone())
-                                              : std::string{},
-                              endText = (entry->occurred && entry->occurred->end)
-                                            ? app::formatLocalDateTime(
-                                                  *entry->occurred->end,
-                                                  *std::chrono::current_zone())
-                                            : std::string{}] {
-                        state.selectedId = entryId;
-                        state.editText   = raw;         // 内容缓冲
-                        state.editStart  = startText;   // 时间缓冲（可直接改）
-                        state.editEnd    = endText;
-                        state.timeError.clear();
-                    })
+                    .onClick([&state, seed = seedFor(*entry)] { applySeed(state, seed); })
                     .content([&] {
                         ui.rect(itemId + ".card")
                             .position(0.0f, 0.0f)
@@ -339,44 +366,95 @@ void composeDayColumn(eui::Ui& ui, AppState& state, const DayColumn& column, int
             }
 
             // ---- 底部：时间没识别的记录（不占 24h 轴）----
-            std::size_t unplaced = 0;
-            std::string firstUnplaced;
+            //
+            // ⚠️ 这里的每一行都必须**可点击**。
+            // 以前这里只有一句"未排时间 N 条"的文字 —— 而清掉时间的记录会掉进这里，
+            // 于是那条记录就再也打不开了（不能改时间、不能删）：死路。
+            std::vector<core::Entry const*> unplacedEntries;
             for (const core::Entry* entry : column.entries)
             {
                 if (!app::placeEntry(*entry, *std::chrono::current_zone()).hasTime)
                 {
-                    if (unplaced == 0) { firstUnplaced = app::displayTitle(*entry); }
-                    ++unplaced;
+                    unplacedEntries.push_back(entry);
                 }
             }
 
-            if (unplaced > 0)
+            if (!unplacedEntries.empty())
             {
                 const float stripY = kHeaderHeight + axisHeight + 4.0f;
+                const std::size_t shown =
+                    std::min(unplacedEntries.size(), static_cast<std::size_t>(kUnplacedMaxRows));
+                const float stripHeight =
+                    kUnplacedHeader + static_cast<float>(shown) * kUnplacedRowHeight + 4.0f;
 
                 ui.rect(id + ".unplaced.bg")
                     .position(6.0f, stripY)
-                    .size(columnWidth - 12.0f, kUnplacedHeight - 8.0f)
+                    .size(columnWidth - 12.0f, stripHeight)
                     .radius(9.0f)
                     .color(colors::kCardBg)
                     .border(1.0f, colors::kCardBorder)
                     .build();
 
                 ui.text(id + ".unplaced.label")
-                    .position(14.0f, stripY + 2.0f)
+                    .position(14.0f, stripY + 1.0f)
                     .size(columnWidth - 22.0f, kLineCaption)
-                    .text("未排时间 " + std::to_string(unplaced) + " 条")
+                    .text("未排时间 " + std::to_string(unplacedEntries.size()) + " 条")
                     .fontSize(kFontCaption)
                     .color(colors::kMuted)
                     .build();
 
-                ui.text(id + ".unplaced.first")
-                    .position(14.0f, stripY + 2.0f + kLineCaption)
-                    .size(columnWidth - 22.0f, kLineCaption)
-                    .text(firstUnplaced)
-                    .fontSize(kFontCaption)
-                    .color(colors::kText)
-                    .build();
+                for (std::size_t i = 0; i < shown; ++i)
+                {
+                    const core::Entry& entry    = *unplacedEntries[i];
+                    const std::string   rowId   = id + ".unplaced." + entry.id;
+                    const float         rowY    = stripY + kUnplacedHeader +
+                                          static_cast<float>(i) * kUnplacedRowHeight;
+                    const float rowWidth = columnWidth - 20.0f;
+
+                    ui.stack(rowId)
+                        .position(10.0f, rowY)
+                        .size(rowWidth, kUnplacedRowHeight - 4.0f)
+                        .onClick([&state, seed = seedFor(entry)] { applySeed(state, seed); })
+                        .content([&] {
+                            ui.rect(rowId + ".bg")
+                                .position(0.0f, 0.0f)
+                                .size(rowWidth, kUnplacedRowHeight - 4.0f)
+                                .radius(6.0f)
+                                .color(colors::kColumnBg)
+                                .border(1.0f, colors::kCardBorder)
+                                .build();
+
+                            ui.rect(rowId + ".dot")
+                                .position(5.0f, 6.0f)
+                                .size(7.0f, 7.0f)
+                                .radius(3.5f)
+                                .color(app::kindColor(entry.kind))
+                                .build();
+
+                            // 标题按可用宽度截断，保证不溢出这一行
+                            ui.text(rowId + ".title")
+                                .position(16.0f, 1.0f)
+                                .size(rowWidth - 20.0f, kUnplacedRowHeight - 6.0f)
+                                .text(app::elideToFit(app::displayTitle(entry), rowWidth - 20.0f,
+                                                      kFontCaption, 1))
+                                .fontSize(kFontCaption)
+                                .color(colors::kText)
+                                .build();
+                        })
+                        .build();
+                }
+
+                if (unplacedEntries.size() > shown)
+                {
+                    ui.text(id + ".unplaced.more")
+                        .position(14.0f, stripY + kUnplacedHeader +
+                                             static_cast<float>(shown) * kUnplacedRowHeight - 2.0f)
+                        .size(columnWidth - 22.0f, kLineCaption)
+                        .text("…还有 " + std::to_string(unplacedEntries.size() - shown) + " 条")
+                        .fontSize(kFontCaption)
+                        .color(colors::kMuted)
+                        .build();
+                }
             }
 
             if (column.entries.empty())
@@ -419,22 +497,28 @@ void composeWeekPage(eui::Ui& ui, AppState& state, const PageRect& area)
             .build();
     }
 
-    // 只要有一列存在"未排时间"的记录，就在轴下面留一条 54px 的条
-    bool anyUnplaced = false;
+    // 未排时间的条：高度按"最多几列里最多的那列"来留，
+    // 保证七列用的是同一条基线（不同列留不同高度会让时间轴错位）。
+    std::size_t maxUnplaced = 0;
     for (const auto& column : columns)
     {
+        std::size_t count = 0;
         for (const core::Entry* entry : column.entries)
         {
-            if (!app::placeEntry(*entry, *std::chrono::current_zone()).hasTime)
-            {
-                anyUnplaced = true;
-                break;
-            }
+            if (!app::placeEntry(*entry, *std::chrono::current_zone()).hasTime) { ++count; }
         }
+        maxUnplaced = std::max(maxUnplaced, count);
     }
 
+    const std::size_t stripRows =
+        std::min(maxUnplaced, static_cast<std::size_t>(kUnplacedMaxRows));
+    const float stripHeight = maxUnplaced == 0 ? 0.0f
+                                              : kUnplacedHeader +
+                                                    static_cast<float>(stripRows) * kUnplacedRowHeight +
+                                                    8.0f;
+
     const float axisHeight =
-        std::max(80.0f, gridHeight - kHeaderHeight - 8.0f - (anyUnplaced ? kUnplacedHeight : 0.0f));
+        std::max(80.0f, gridHeight - kHeaderHeight - 8.0f - stripHeight);
 
     composeGutter(ui, PageRect{ area.x, gridTop, kGutterWidth, gridHeight }, axisTop, axisHeight);
 
