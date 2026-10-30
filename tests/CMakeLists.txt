@@ -19,6 +19,7 @@ add_executable(tests
     test_parse.cpp       # 中文时间解析
     test_calendar.cpp    # 周视图数据准备（纯函数）
     test_corpus.cpp      # 解析语料（append/load/run）
+    test_time_edit.cpp   # 改时间 / 清时间能不能落盘
     test_time_input.cpp) # 手动改时间的文本解析
 
 target_link_libraries(tests PRIVATE core parse app)

@@ -12,6 +12,7 @@
 
 #include "app/api_key.hpp"
 #include "app/entry_service.hpp"
+#include "app/corpus.hpp"
 #include "app/time_input.hpp"
 #include "app_state.hpp"
 #include "core/core.hpp"
@@ -169,13 +170,70 @@ bool pollDraftResult(AppState& state)
         {
             state.timeError = done.error;
         }
+        else if (done.startLocal.empty())
+        {
+            state.timeError = "模型认为这句里没有时间";
+        }
         else
         {
-            state.editStart = done.startLocal;
-            state.editEnd   = done.endLocal;
-            state.aiStart   = done.startLocal;   // 记下来源：保存时判断是"采纳"还是"手改"
-            state.aiEnd     = done.endLocal;
-            state.timeError = done.startLocal.empty() ? "模型认为这句里没有时间" : "";
+            // ---- 直接生效（用户明确要求：不该再点一次才更新） ----
+            // 但仍然是一次"可撤销"的写入：来源记 Ai，手改/清除都能覆盖它；
+            // 采纳的同时把这条样本写进解析语料，给规则库攒缺口。
+            core::Core note{ app::dataPath() };
+            if (auto loaded = note.load(); !loaded)
+            {
+                state.timeError = "写回失败: " + loaded.error();
+                return true;
+            }
+
+            auto found = note.findAny(done.entryId);
+            if (!found)
+            {
+                state.timeError = "记录已不存在";
+                return true;
+            }
+
+            const auto startUtc = app::parseLocalDateTime(done.startLocal, found->created_at);
+            if (!startUtc)
+            {
+                state.timeError = "模型给的时间格式不对: " + done.startLocal;
+                return true;
+            }
+
+            std::optional<std::chrono::sys_seconds> endUtc;
+            if (!done.endLocal.empty())
+            {
+                endUtc = app::parseLocalDateTime(done.endLocal, found->created_at);
+                if (!endUtc || (endUtc && *endUtc <= *startUtc))
+                {
+                    endUtc.reset();   // 结束时间不合理就丢掉，别把整条记录写坏
+                }
+            }
+
+            core::Entry entry    = *found;
+            entry.occurred       = core::TimeRange{ *startUtc, endUtc };
+            entry.occurred_source = core::TimeSource::Ai;
+
+            if (auto updated = note.update(entry); !updated)
+            {
+                state.timeError = "写回失败: " + updated.error();
+                return true;
+            }
+
+            app::appendParseCase("tests/corpus/parse-cases.txt",
+                                 app::ParseCase{ entry.raw_text, entry.created_at, *startUtc, endUtc },
+                                 *std::chrono::current_zone());
+
+            // 输入框跟着磁盘上的真值走（不是跟着模型文本走），避免"显示的和存的不一致"
+            state.editStart = app::formatLocalDateTime(*startUtc, *std::chrono::current_zone());
+            state.editEnd   = endUtc ? app::formatLocalDateTime(*endUtc, *std::chrono::current_zone())
+                                     : std::string{};
+            state.aiStart.clear();   // 已经落盘，不需要再"采纳"
+            state.aiEnd.clear();
+            state.timeError.clear();
+            state.timeStatus = "AI 已更新时间为 " + state.editStart;
+
+            reloadData(state);
         }
         return true;
     }

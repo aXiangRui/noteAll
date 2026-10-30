@@ -85,6 +85,7 @@ void applySeed(AppState& state, DetailSeed const& seed)
     state.aiStart.clear();   // 换了一条记录，旧的 AI 建议不再适用
     state.aiEnd.clear();
     state.timeError.clear();
+    state.timeStatus.clear();
 }
 
 void composeChip(eui::Ui& ui, const std::string& id, float x, float y, float width,

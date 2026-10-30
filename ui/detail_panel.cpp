@@ -220,6 +220,36 @@ void composeDetailPanel(eui::Ui& ui, AppState& state, const PageRect& area)
                           return;
                       }
 
+                      // ---- 回读校验 ----
+                      // 只写不验的话，"看起来没保存"就只能是猜。
+                      // 这里把磁盘上的真值读回来对一遍：不一致就把原因摆在面板上。
+                      core::Core verify{ app::dataPath() };
+                      if (auto loaded = verify.load(); !loaded)
+                      {
+                          state.timeError = "保存后读回失败: " + loaded.error();
+                          return;
+                      }
+
+                      const auto stored = verify.findAny(id);
+                      if (!stored || !stored->occurred)
+                      {
+                          state.timeError = "保存后读回不一致：磁盘上这条没有时间了";
+                          return;
+                      }
+
+                      const bool sameStart = stored->occurred->start == *startUtc;
+                      const bool sameEnd   = stored->occurred->end.has_value() == endUtc.has_value() &&
+                                           (!endUtc || *stored->occurred->end == *endUtc);
+
+                      if (!sameStart || !sameEnd)
+                      {
+                          state.timeError = std::string{"保存后读回不一致（磁盘="} +
+                                            app::formatLocalDateTime(stored->occurred->start,
+                                                                     *std::chrono::current_zone()) +
+                                            "）—— 可能有别的窗口/进程覆盖了它";
+                          return;
+                      }
+
                       // 采纳 AI 的时间 = 一条真实语料：存下来，以后拿来补规则。
                       if (fromAi)
                       {
@@ -229,7 +259,13 @@ void composeDetailPanel(eui::Ui& ui, AppState& state, const PageRect& area)
                                                *std::chrono::current_zone());
                       }
 
+                      // 输入框对齐磁盘真值（避免"面板显示的和存的不一样"）
+                      state.editStart = app::formatLocalDateTime(*startUtc, *std::chrono::current_zone());
+                      state.editEnd   = endUtc ? app::formatLocalDateTime(*endUtc, *std::chrono::current_zone())
+                                               : std::string{};
                       state.timeError.clear();
+                      state.timeStatus = "已保存 " + state.editStart +
+                                         (fromAi ? "（来源 AI）" : "（来源 手动）");
                       reloadData(state);
                   });
 
@@ -269,6 +305,11 @@ void composeDetailPanel(eui::Ui& ui, AppState& state, const PageRect& area)
     if (!state.timeError.empty())
     {
         metaLine(ui, "detail.time.error", contentX, y, contentW, state.timeError, true);
+        y += kLineCaption + 2.0f;
+    }
+    else if (!state.timeStatus.empty())
+    {
+        metaLine(ui, "detail.time.status", contentX, y, contentW, state.timeStatus);
         y += kLineCaption + 2.0f;
     }
 
@@ -334,10 +375,31 @@ void composeDetailPanel(eui::Ui& ui, AppState& state, const PageRect& area)
                       if (!found) { state.error = "找不到这条记录"; return; }
 
                       core::Entry entry = *found;
-                      entry.raw_text    = state.editText;
-                      entry.occurred    = app::occurredFromText(entry.raw_text, entry.created_at);
-                      entry.occurred_source = entry.occurred ? core::TimeSource::Rule
-                                                             : core::TimeSource::None;
+
+                      // 时间怎么处理（这是最容易出问题的一步）：
+                      //   * 新原文能解析出时间 → 用它（来源 Rule）
+                      //   * 解析不出，但原来的时间是**用户手动 / AI 定的** → 保留
+                      //     否则"改个错别字"会把手改的时间悄悄抹掉
+                      //   * 解析不出，且原来的时间来自规则 → 清空（用户把时间删掉了）
+                      const auto reparsed = app::occurredFromText(state.editText, entry.created_at);
+
+                      const bool userOwnedTime =
+                          entry.occurred &&
+                          (entry.occurred_source == core::TimeSource::Manual ||
+                           entry.occurred_source == core::TimeSource::Ai);
+
+                      entry.raw_text = state.editText;
+                      if (reparsed)
+                      {
+                          entry.occurred        = reparsed;
+                          entry.occurred_source = core::TimeSource::Rule;
+                      }
+                      else if (!userOwnedTime)
+                      {
+                          entry.occurred.reset();
+                          entry.occurred_source = core::TimeSource::None;
+                      }
+                      // else：保留原来的时间和来源（改错别字不该丢时间）
 
                       // 原文变了，旧标题/摘要就成了过期数据 —— 打回 pending 等重生成。
                       entry.draft_status   = core::DraftStatus::Pending;
