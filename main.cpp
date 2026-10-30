@@ -13,6 +13,9 @@
 #include "app/calendar.hpp"
 #include "app/corpus.hpp"
 #include "app/time_input.hpp"
+#include <cstdio>
+#include "ledger/money.hpp"
+#include "ledger/book.hpp"
 #include "app/entry_service.hpp"
 #include "core/core.hpp"
 #include "core/note_log.hpp"
@@ -178,6 +181,9 @@ void printHelp(std::ostream& os)
           "  note draft --id <id>   只补某一条\n"
           "  note parse <文本...>    只试一下时间解析，不写盘（排查「为什么不识别」用）\n"
           "  note parse --corpus    跑一遍解析语料（tests/corpus/parse-cases.txt）\n"
+          "  note ledger add <文本>  记一笔（金额写句末：午饭 32）；--income / --at / --category\n"
+          "  note ledger sum         本月汇总（--month 2026-10）\n"
+          "  note ledger list        本月流水\n"
           "  note help               显示这个帮助\n"
           "\n"
           "  直接运行 note（不带参数）进入交互模式，命令里不用再写开头的 note：\n"
@@ -481,7 +487,7 @@ int execute(const std::vector<std::string>& args,
     const bool needsId = (cmd == "show" || cmd == "confirm" || cmd == "rm" || cmd == "undo" ||
                           cmd == "purge");
 
-    if (cmd != "add" && cmd != "list" && cmd != "draft" && !needsId)
+    if (cmd != "add" && cmd != "list" && cmd != "draft" && cmd != "ledger" && !needsId)
     {
         v.RenderError("不认识的命令: " + cmd + "（输入 help 看用法）");
         return 1;
@@ -641,6 +647,166 @@ int execute(const std::vector<std::string>& args,
         v.RenderError("草稿生成目前只支持 Windows（依赖 WinHTTP）");
         return 1;
 #endif
+    }
+
+    // ---- ledger：记账（流水）----
+    //
+    // 和数据文件同目录、独立文件 ledger.jsonl。刻意不和 note 混在一条记录里：
+    // 那边是自由文本，这边是"金额 + 分类 + 方向"的强约束数据。
+    if (cmd == "ledger")
+    {
+        const std::filesystem::path ledgerFile = [] {
+            const auto        dataFile = app::dataPath();
+            std::filesystem::path dir  = dataFile.has_parent_path() ? dataFile.parent_path()
+                                                                    : std::filesystem::path{ "." };
+            return dir / "ledger.jsonl";
+        }();
+
+        ledger::Book book{ ledgerFile };
+        if (auto loaded = book.load(); !loaded) { return fail("读取账本失败: " + loaded.error()); }
+        for (const auto& warning : book.warnings()) { v.RenderError(warning); }
+
+        const std::string sub = args.size() >= 3 ? args[2] : "sum";
+
+        // 解析 "YYYY-MM" → year_month；空则用当前月
+        const auto monthOf = [](const std::string& text) -> std::optional<std::chrono::year_month> {
+            if (text.empty())
+            {
+                const std::chrono::zoned_time      zt{ std::chrono::current_zone(), app::nowUtc() };
+                const std::chrono::year_month_day  today{
+                    std::chrono::floor<std::chrono::days>(zt.get_local_time()) };
+                return std::chrono::year_month{ today.year(), today.month() };
+            }
+
+            int year  = 0;
+            int month = 0;
+            if (std::sscanf(text.c_str(), "%d-%d", &year, &month) != 2) { return std::nullopt; }
+            if (month < 1 || month > 12) { return std::nullopt; }
+            return std::chrono::year_month{ std::chrono::year{ year },
+                                            std::chrono::month{ static_cast<unsigned>(month) } };
+        };
+
+        if (sub == "add")
+        {
+            bool                     income = false;
+            std::string              atText;
+            std::string              category;
+            std::vector<std::string> words;
+
+            for (std::size_t i = 3; i < args.size(); ++i)
+            {
+                if (args[i] == "--income") { income = true; }
+                else if (args[i] == "--at" && i + 1 < args.size()) { atText = args[++i]; }
+                else if (args[i] == "--category" && i + 1 < args.size()) { category = args[++i]; }
+                else { words.push_back(args[i]); }
+            }
+
+            std::string text;
+            for (std::size_t i = 0; i < words.size(); ++i)
+            {
+                if (i > 0) { text += ' '; }
+                text += words[i];
+            }
+
+            if (text.empty())
+            {
+                v.RenderError("用法：note ledger add \"午饭 32\" [--income] [--at \"2026-10-30 12:00\"] [--category 餐饮]");
+                return 1;
+            }
+
+            const auto parsed = ledger::parseAmountNote(text);
+            if (!parsed)
+            {
+                v.RenderError("没找到金额：金额要写在句末，比如「午饭 32」「打车12块」");
+                return 1;
+            }
+
+            const ledger::Direction direction =
+                income ? ledger::Direction::Income : ledger::guessDirection(parsed->note);
+            if (category.empty()) { category = ledger::guessCategory(parsed->note, direction); }
+
+            std::optional<std::chrono::sys_seconds> occurred = app::nowUtc();
+            if (!atText.empty())
+            {
+                occurred = app::parseLocalDateTime(atText, app::nowUtc());
+                if (!occurred) { return fail("时间看不懂: " + atText + "（格式 2026-10-30 12:00）"); }
+            }
+
+            auto added = book.add(parsed->amountCents, direction, *occurred, category, parsed->note,
+                                  app::nowUtc());
+            if (!added) { return fail(added.error()); }
+
+            v.RenderMessage(std::string{"已记 "} + (direction == ledger::Direction::Income ? "收入 " : "支出 ") +
+                            ledger::formatCents(added->amountCents) + "　" + added->category + "　" +
+                            added->note + "　" + added->id);
+            return 0;
+        }
+
+        if (sub == "list")
+        {
+            std::string monthText;
+            for (std::size_t i = 3; i < args.size(); ++i)
+            {
+                if (args[i] == "--month" && i + 1 < args.size()) { monthText = args[++i]; }
+            }
+
+            const auto month = monthOf(monthText);
+            if (!month) { return fail("月份看不懂: " + monthText + "（格式 2026-10）"); }
+
+            const auto* tz = std::chrono::current_zone();
+
+            int shown = 0;
+            for (const auto& t : book.list())
+            {
+                const std::chrono::zoned_time     zt{ tz, t.occurred };
+                const std::chrono::year_month_day day{
+                    std::chrono::floor<std::chrono::days>(zt.get_local_time()) };
+                const std::chrono::year_month ym{ day.year(), day.month() };
+                if (ym != *month) { continue; }
+
+                std::cout << app::formatLocalDateTime(t.occurred, *tz) << "  "
+                          << (t.direction == ledger::Direction::Income ? "+" : "-")
+                          << ledger::formatCents(t.amountCents) << "  " << t.category << "  "
+                          << t.note << "  " << t.id << '\n';
+                ++shown;
+            }
+
+            if (shown == 0) { v.RenderMessage("这个月还没记账"); }
+            return 0;
+        }
+
+        if (sub == "rm")
+        {
+            if (args.size() < 4) { v.RenderError("用法：note ledger rm <id>"); return 1; }
+
+            if (auto removed = book.remove(args[3]); !removed) { return fail(removed.error()); }
+            v.RenderMessage("已删除 " + args[3]);
+            return 0;
+        }
+
+        // 默认：sum
+        std::string monthText;
+        for (std::size_t i = 3; i < args.size(); ++i)
+        {
+            if (args[i] == "--month" && i + 1 < args.size()) { monthText = args[++i]; }
+        }
+
+        const auto month = monthOf(monthText);
+        if (!month) { return fail("月份看不懂: " + monthText + "（格式 2026-10）"); }
+
+        const auto summary = book.summary(*month);
+
+        std::cout << static_cast<int>(month->year()) << "-" << static_cast<unsigned>(month->month())
+                  << "　支出 " << ledger::formatCents(summary.expenseCents) << "　收入 "
+                  << ledger::formatCents(summary.incomeCents) << "　净 "
+                  << ledger::formatCents(summary.incomeCents - summary.expenseCents) << "　共 "
+                  << summary.count << " 笔\n";
+
+        for (const auto& item : summary.byCategory)
+        {
+            std::cout << "  " << item.category << "  " << ledger::formatCents(item.cents) << '\n';
+        }
+        return 0;
     }
 
     if (cmd == "list")
@@ -856,7 +1022,7 @@ int run(const std::vector<std::string>& args, view::View& v)
     const bool needsId = (cmd == "show" || cmd == "confirm" || cmd == "rm" || cmd == "undo" ||
                           cmd == "purge");
 
-    if (cmd != "add" && cmd != "list" && cmd != "parse" && cmd != "draft" && !needsId)
+    if (cmd != "add" && cmd != "list" && cmd != "parse" && cmd != "draft" && cmd != "ledger" && !needsId)
     {
         v.RenderError("不认识的命令: " + cmd + "（输入 note help 看用法）");
         return 1;

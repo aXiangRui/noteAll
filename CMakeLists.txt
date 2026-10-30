@@ -106,6 +106,20 @@ target_include_directories(app PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
 target_link_libraries(app PUBLIC core parse)
 
 # ---------------------------------------------------------------------------
+# ledger —— 记账（流水）
+#
+# 复用 core 的底座（FileLock / appendLog / schema 头思路），但数据模型独立：
+# 账本不是一堆 Entry，金额是整数分，分类是必填短字符串。
+# 故意不依赖 parse：记账的时间由用户直接给（默认现在），不靠中文解析猜。
+# ---------------------------------------------------------------------------
+add_library(ledger
+    src/ledger/book.cpp
+    src/ledger/ledger.cpp
+    src/ledger/money.cpp
+    src/ledger/store.cpp)
+target_include_directories(ledger PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
+target_link_libraries(ledger PUBLIC core third_party)
+# ---------------------------------------------------------------------------
 # ⚠️ flow（草稿调度）与 workflow（编排引擎）已移到 labs/，不再参与主线构建。
 #
 # 原因：它们零用户 —— note 的依赖图是 core + parse + view + llm，草稿流程
@@ -161,7 +175,7 @@ endif()
 # flow / workflow 已移到 labs/（零用户，详见 labs/README.md）。
 # ---------------------------------------------------------------------------
 add_executable(note main.cpp)
-target_link_libraries(note PRIVATE core view parse app)
+target_link_libraries(note PRIVATE core view parse app ledger)
 
 # 草稿功能需要 llm 层（Windows-only）。没它 note 其余功能照常。
 if(TARGET llm)
