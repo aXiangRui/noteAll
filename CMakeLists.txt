@@ -106,6 +106,16 @@ target_include_directories(app PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
 target_link_libraries(app PUBLIC core parse)
 
 # ---------------------------------------------------------------------------
+# import —— 账单导入的底座
+#
+# csv.cpp 只做"文本 → 行×列"。编码转换（GBK/BOM）、表头定位、列名映射、去重
+# 都不在这里 —— 那些是适配层的事，将来换 CSV 库也只改这一个文件。
+# ---------------------------------------------------------------------------
+add_library(import
+    src/import/csv.cpp)
+target_include_directories(import PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
+
+# ---------------------------------------------------------------------------
 # ledger —— 记账（流水）
 #
 # 复用 core 的底座（FileLock / appendLog / schema 头思路），但数据模型独立：
