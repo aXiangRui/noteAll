@@ -41,4 +41,13 @@ std::chrono::sys_seconds localWallToUtc(std::chrono::sys_seconds wall);
  */
 std::expected<core::Entry, std::string> addFromText(core::Core& note, std::string_view text);
 
+/**
+ * 只管"这句话里的时间"：解析 → 换回 UTC。解析不出返回空（不猜）。
+ *
+ * 改原文之后要用它重算 occurred —— 和 add 走同一套时区换算，
+ * 否则"改一条"和"加一条"的同一句话会得到不同时间。
+ */
+std::optional<core::TimeRange> occurredFromText(std::string_view text,
+                                                std::chrono::sys_seconds createdAt);
+
 }  // namespace app

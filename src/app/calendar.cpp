@@ -111,6 +111,58 @@ std::vector<DayColumn> buildWeek(const std::vector<core::Entry>& entries,
     return columns;
 }
 
+namespace
+{
+
+/** ASCII 小写化；多字节（中文）原样保留 —— 中文没有大小写。 */
+std::string lowerAscii(std::string_view text)
+{
+    std::string out;
+    out.reserve(text.size());
+    for (const char c : text)
+    {
+        out.push_back(static_cast<char>(c >= 'A' && c <= 'Z' ? c - 'A' + 'a' : c));
+    }
+    return out;
+}
+
+bool containsIgnoreCase(std::string_view haystack, std::string_view needle)
+{
+    if (needle.empty()) { return true; }
+    return lowerAscii(haystack).find(lowerAscii(needle)) != std::string::npos;
+}
+
+}  // namespace
+
+bool matchesQuery(const core::Entry& entry, std::string_view query)
+{
+    if (query.empty()) { return true; }
+
+    if (containsIgnoreCase(entry.raw_text, query)) { return true; }
+    if (containsIgnoreCase(entry.title, query)) { return true; }
+    if (containsIgnoreCase(entry.summary, query)) { return true; }
+
+    for (const auto& tag : entry.tags)
+    {
+        if (containsIgnoreCase(tag, query)) { return true; }
+    }
+    return false;
+}
+
+std::vector<core::Entry> filterEntries(const std::vector<core::Entry>& entries,
+                                       std::string_view                query)
+{
+    std::vector<core::Entry> out;
+    out.reserve(entries.size());
+
+    for (const auto& entry : entries)
+    {
+        if (entry.deleted_at) { continue; }   // 搜索只找活的
+        if (matchesQuery(entry, query)) { out.push_back(entry); }
+    }
+    return out;
+}
+
 std::string weekdayLabel(std::chrono::weekday wd)
 {
     // iso_encoding: 1=周一 … 7=周日

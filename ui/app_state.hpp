@@ -35,6 +35,12 @@ struct AppState
     bool                      composing = false;
     std::string               composeText;
     std::string               composeError;
+
+    // 搜索（顶栏第二行的输入框）；空 = 不过滤
+    std::string               searchText;
+
+    // 详情面板里的编辑缓冲（打开时从 raw_text 填
+    std::string               editText;
     bool                      loaded = false;
 };
 

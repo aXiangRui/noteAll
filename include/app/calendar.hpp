@@ -46,6 +46,18 @@ std::vector<DayColumn> buildWeek(const std::vector<core::Entry>&   entries,
                                  std::chrono::year_month_day      weekStart,
                                  const std::chrono::time_zone&    tz);
 
+/**
+ * 搜索过滤：在 原文 / 标题 / 摘要 / 标签 里找子串（ASCII 不分大小写）。
+ *
+ * 空查询返回全部。保持原顺序（调用方已经按时间排好）。
+ * 已删除的不参与 —— 搜索是"找活的记录"，墓碑只在"已删除"列表里出现。
+ */
+std::vector<core::Entry> filterEntries(const std::vector<core::Entry>& entries,
+                                       std::string_view                query);
+
+/** 单条是否命中查询（给测试和 UI 复用）。 */
+bool matchesQuery(const core::Entry& entry, std::string_view query);
+
 // ---- 显示用的格式化 ----
 
 std::string weekdayLabel(std::chrono::weekday wd);        // 周一 …

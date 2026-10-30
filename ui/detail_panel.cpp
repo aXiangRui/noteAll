@@ -1,15 +1,22 @@
-// 详情面板：点开一张卡片之后，才显示完整内容。
+// 详情面板：点开一张卡片之后，显示完整内容，并且**可以改、可以删**。
 //
-// 为什么要有它（这是用户明确要求的）：
+// 为什么要有它：
 //   时间轴是"扫一眼"的地方，卡片上只该有标题；
-//   原文可能是一整段话，塞进 150px 宽的列里既看不清也挤掉别的卡片。
-//   所以：列表只放标题，详情才读全文。
+//   但记事软件最常做的事是"改错"和"删掉" —— 所以详情面板是唯一能编辑的地方。
 //
-// 面板画在内容区右侧，盖在周视图上面（不改周视图的布局计算）。
+// 编辑的语义（重要）：改的是**原文**。保存后：
+//   1. 重新解析时间（occurred 全部重算，和 add 走同一个函数）
+//   2. 草稿状态打回 pending（标题/摘要都是基于原文的，必须重生成）
+//   3. 立刻发起一次后台草稿生成
+// 这样"改一句话"和"重新记一条"的结果完全一致，不会出现两套语义。
 
 #include "pages.hpp"
 
 #include <string>
+
+#include "app/entry_service.hpp"
+#include "core/core.hpp"
+#include "draft_runner.hpp"
 
 namespace app
 {
@@ -19,32 +26,41 @@ namespace
 
 using namespace metrics;
 
-constexpr float kPanelWidth = 360.0f;
+constexpr float kPanelWidth = 380.0f;
 constexpr float kPanelPad = 18.0f;
-constexpr float kRowGap = 10.0f;
+constexpr float kButtonHeight = 40.0f;
 
-void labelValue(eui::Ui& ui, const std::string& id, float x, float& y, float width,
-                const std::string& label, const std::string& value)
+void composeButton(eui::Ui& ui, const std::string& id, float x, float y, float width,
+                   const std::string& label, bool emphasized, std::function<void()> onClick)
 {
-    ui.text(id + ".label")
+    ui.stack(id)
+        .position(x, y)
+        .size(width, kButtonHeight)
+        .onClick(std::move(onClick))
+        .content([&] {
+            ui.rect(id + ".bg")
+                .position(0.0f, 0.0f).size(width, kButtonHeight).radius(10.0f)
+                .color(emphasized ? colors::kAccent : colors::kColumnBg)
+                .border(1.0f, colors::kCardBorder).build();
+            ui.text(id + ".label")
+                .position(0.0f, 8.0f).size(width, kLineCaption)
+                .text(label).fontSize(kFontCaption)
+                .horizontalAlign(eui::HorizontalAlign::Center)
+                .color(colors::kText).build();
+        })
+        .build();
+}
+
+void metaLine(eui::Ui& ui, const std::string& id, float x, float y, float width,
+              const std::string& text)
+{
+    ui.text(id)
         .position(x, y)
         .size(width, kLineCaption)
-        .text(label)
+        .text(text)
         .fontSize(kFontCaption)
         .color(colors::kMuted)
         .build();
-
-    y += kLineCaption;
-
-    ui.text(id + ".value")
-        .position(x, y)
-        .size(width, kLineBody)
-        .text(value)
-        .fontSize(kFontBody)
-        .color(colors::kText)
-        .build();
-
-    y += kLineBody + kRowGap;
 }
 
 }  // namespace
@@ -68,10 +84,12 @@ void composeDetailPanel(eui::Ui& ui, AppState& state, const PageRect& area)
         return;
     }
 
-    const float panelX = area.x + area.width - kPanelWidth;
-    const float panelY = area.y;
-    const float panelW = kPanelWidth;
-    const float panelH = area.height;
+    const bool deleted = selected->deleted_at.has_value();
+
+    const float panelX   = area.x + area.width - kPanelWidth;
+    const float panelY   = area.y;
+    const float panelW   = kPanelWidth;
+    const float panelH   = area.height;
     const float contentX = panelX + kPanelPad;
     const float contentW = panelW - kPanelPad * 2.0f;
 
@@ -83,7 +101,7 @@ void composeDetailPanel(eui::Ui& ui, AppState& state, const PageRect& area)
         .border(1.0f, colors::kCardBorder)
         .build();
 
-    // 顶部：标题 + 关闭
+    // ---- 顶部：标题 + 关闭 ----
     ui.text("detail.title")
         .position(contentX, panelY + 14.0f)
         .size(contentW - 56.0f, kLineTitle)
@@ -94,77 +112,125 @@ void composeDetailPanel(eui::Ui& ui, AppState& state, const PageRect& area)
         .color(colors::kText)
         .build();
 
-    ui.stack("detail.close")
-        .position(panelX + panelW - kPanelPad - 40.0f, panelY + 14.0f)
-        .size(40.0f, 36.0f)
-        .onClick([&state] { state.selectedId.clear(); })
-        .content([&] {
-            ui.rect("detail.close.bg")
-                .position(0.0f, 0.0f).size(40.0f, 36.0f).radius(9.0f)
-                .color(colors::kAccent).border(1.0f, colors::kCardBorder).build();
-            ui.text("detail.close.label")
-                .position(0.0f, 6.0f).size(40.0f, kLineCaption)
-                .text("✕").fontSize(kFontCaption)
-                .horizontalAlign(eui::HorizontalAlign::Center)
-                .color(colors::kText).build();
-        })
-        .build();
+    composeButton(ui, "detail.close", panelX + panelW - kPanelPad - 40.0f, panelY + 14.0f, 40.0f,
+                  "✕", false, [&state] { state.selectedId.clear(); });
 
-    float y = panelY + 14.0f + kLineTitle + 10.0f;
+    // ---- 元信息 ----
+    float y = panelY + 14.0f + kLineTitle + 8.0f;
 
-    // 时间
-    const std::string timeLine = app::timeLabel(*selected, *std::chrono::current_zone());
-    // 记录发生在哪一天（本地）：直接用数据层算好的，别在这里重复时区换算
-    const std::string dayLine =
-        app::monthDayLabel(app::localDayOf(*selected, *std::chrono::current_zone()));
+    metaLine(ui, "detail.time", contentX, y, contentW,
+             "时间：" + app::timeLabel(*selected, *std::chrono::current_zone()));
+    y += kLineCaption + 2.0f;
 
-    labelValue(ui, "detail.time", contentX, y, contentW, "时间", timeLine);
-    labelValue(ui, "detail.kind", contentX, y, contentW, "类型",
-               core::toString(selected->kind) + "　（记录于 " + dayLine + "）");
-
-    // 标签
     std::string tagsText;
     for (std::size_t i = 0; i < selected->tags.size(); ++i)
     {
         tagsText += (i == 0 ? "" : "、") + selected->tags[i];
     }
-    labelValue(ui, "detail.tags", contentX, y, contentW, "标签",
-               tagsText.empty() ? "（无）" : tagsText);
 
-    labelValue(ui, "detail.draft", contentX, y, contentW, "草稿状态",
-               core::toString(selected->draft_status)
-                   + (selected->draft_error.empty() ? "" : "　" + selected->draft_error));
+    metaLine(ui, "detail.kind", contentX, y, contentW,
+             "类型：" + core::toString(selected->kind) + "　标签：" +
+                 (tagsText.empty() ? "（无）" : tagsText));
+    y += kLineCaption + 2.0f;
 
-    // 原文（这才是"实际内容"，换行显示，按面板高度截断）
-    ui.text("detail.raw.label")
+    metaLine(ui, "detail.draft", contentX, y, contentW,
+             "草稿：" + core::toString(selected->draft_status) +
+                 (selected->draft_error.empty() ? "" : "（" + selected->draft_error + "）"));
+    y += kLineCaption + 10.0f;
+
+    if (deleted)
+    {
+        metaLine(ui, "detail.deleted", contentX, y, contentW, "这条记录已删除（软删除，可恢复）");
+        y += kLineCaption + 6.0f;
+    }
+
+    // ---- 编辑区：改的是原文 ----
+    ui.text("detail.edit.label")
         .position(contentX, y)
         .size(contentW, kLineCaption)
-        .text("原文")
+        .text("内容（改完点保存：会重新解析时间并重生成标题）")
         .fontSize(kFontCaption)
         .color(colors::kMuted)
         .build();
+    y += kLineCaption + 2.0f;
 
-    y += kLineCaption;
+    const float buttonsY   = panelY + panelH - kButtonHeight - kPanelPad;
+    const float editHeight = std::max(120.0f, buttonsY - y - 12.0f);
 
-    const float rawHeight = std::max(kLineBody * 2.0f, panelY + panelH - y - kPanelPad);
-
-    ui.rect("detail.raw.bg")
-        .position(contentX - 6.0f, y - 4.0f)
-        .size(contentW + 12.0f, rawHeight + 8.0f)
-        .radius(10.0f)
-        .color(colors::kCardBg)
-        .border(1.0f, colors::kCardBorder)
-        .build();
-
-    ui.text("detail.raw.text")
+    components::input(ui, "detail.edit")
         .position(contentX, y)
-        .size(contentW, rawHeight)
-        .text(selected->raw_text)
+        .size(contentW, editHeight)
+        .multiline(true)
+        .scrollbar(true)
         .fontSize(kFontBody)
-        .lineHeight(kLineBody)
-        .wrap(true)
-        .color(colors::kText)
+        .value(state.editText)
+        .onChange([&state](const std::string& value) { state.editText = value; })
         .build();
+
+    // ---- 底部按钮 ----
+    const float deleteW = 96.0f;
+    const float redraftW = 116.0f;
+    const float saveW = 88.0f;
+
+    if (deleted)
+    {
+        composeButton(ui, "detail.restore", contentX, buttonsY, deleteW, "恢复", false,
+                      [&state, id = selected->id] {
+                          core::Core note{ app::dataPath() };
+                          if (auto loaded = note.load(); !loaded) { state.error = loaded.error(); return; }
+                          if (auto ok = note.restore(id); !ok) { state.error = ok.error(); return; }
+                          reloadData(state);
+                      });
+    }
+    else
+    {
+        composeButton(ui, "detail.delete", contentX, buttonsY, deleteW, "删除", false,
+                      [&state, id = selected->id] {
+                          core::Core note{ app::dataPath() };
+                          if (auto loaded = note.load(); !loaded) { state.error = loaded.error(); return; }
+                          if (auto ok = note.remove(id); !ok) { state.error = ok.error(); return; }
+                          reloadData(state);
+                      });
+
+        composeButton(ui, "detail.redraft", contentX + deleteW + 8.0f, buttonsY, redraftW,
+                      "重生成标题", false, [&state, id = selected->id, raw = selected->raw_text] {
+                          startDraftInBackground(id, raw);
+                      });
+    }
+
+    // 保存：改原文 → 重算 occurred → 打回 pending → 后台重生成
+    composeButton(ui, "detail.save", panelX + panelW - kPanelPad - saveW, buttonsY, saveW, "保存",
+                  true, [&state, id = selected->id] {
+                      if (state.editText.empty())
+                      {
+                          state.error = "内容不能为空";
+                          return;
+                      }
+
+                      core::Core note{ app::dataPath() };
+                      if (auto loaded = note.load(); !loaded) { state.error = loaded.error(); return; }
+
+                      auto found = note.findAny(id);
+                      if (!found) { state.error = "找不到这条记录"; return; }
+
+                      core::Entry entry = *found;
+                      entry.raw_text    = state.editText;
+                      entry.occurred    = app::occurredFromText(entry.raw_text, entry.created_at);
+
+                      // 原文变了，原来的标题/摘要就是过期数据 —— 打回 pending 等重生成。
+                      entry.draft_status   = core::DraftStatus::Pending;
+                      entry.draft_attempts = 0;
+                      entry.draft_error.clear();
+
+                      if (auto updated = note.update(entry); !updated)
+                      {
+                          state.error = updated.error();
+                          return;
+                      }
+
+                      reloadData(state);
+                      startDraftInBackground(entry.id, entry.raw_text);
+                  });
 }
 
 }  // namespace app

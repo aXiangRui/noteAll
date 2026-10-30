@@ -34,6 +34,26 @@ std::chrono::sys_seconds localWallToUtc(std::chrono::sys_seconds wall)
     return wall - offset;
 }
 
+std::optional<core::TimeRange> occurredFromText(std::string_view text,
+                                                std::chrono::sys_seconds createdAt)
+{
+    // parseTime 吃的是墙上时钟，所以 base 要换成本地墙上时间。
+    const auto parsed = parse::parseTime(text, utcToLocalWall(createdAt));
+
+    if (!parsed.occurred)
+    {
+        return std::nullopt;   // 认不出就留空，不猜（记录优先）
+    }
+
+    // 解析结果是墙上时钟，落盘前换回 UTC。
+    return core::TimeRange{
+        localWallToUtc(parsed.occurred->start),
+        parsed.occurred->end
+            ? std::optional<std::chrono::sys_seconds>{ localWallToUtc(*parsed.occurred->end) }
+            : std::nullopt,
+    };
+}
+
 std::expected<core::Entry, std::string> addFromText(core::Core& note, std::string_view text)
 {
     const std::string raw{ text };
@@ -42,22 +62,7 @@ std::expected<core::Entry, std::string> addFromText(core::Core& note, std::strin
     // 顺序反过来（先 add 再 parse），两次 now() 之间可能已经跨了一天。
     const auto createdAt = nowUtc();
 
-    // parseTime 吃的是墙上时钟，所以 base 要换成本地墙上时间。
-    const auto parsed = parse::parseTime(raw, utcToLocalWall(createdAt));
-
-    // 解析结果是墙上时钟，落盘前换回 UTC。
-    std::optional<core::TimeRange> occurred;
-    if (parsed.occurred)
-    {
-        occurred = core::TimeRange{
-            localWallToUtc(parsed.occurred->start),
-            parsed.occurred->end
-                ? std::optional<std::chrono::sys_seconds>{ localWallToUtc(*parsed.occurred->end) }
-                : std::nullopt,
-        };
-    }
-
-    return note.add(raw, createdAt, occurred);
+    return note.add(raw, createdAt, occurredFromText(raw, createdAt));
 }
 
 }  // namespace app

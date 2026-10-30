@@ -29,6 +29,7 @@ using namespace metrics;
 constexpr float kChipHeight = 40.0f;
 constexpr float kChipLabelTop = 9.0f;
 constexpr float kTopBarHeight = 58.0f;
+constexpr float kSubBarHeight = 46.0f;   // 第二行：周范围 + 搜索框
 constexpr float kColumnGap = 8.0f;
 constexpr float kColumnPad = 10.0f;
 constexpr float kHeaderHeight = 62.0f;
@@ -112,12 +113,26 @@ void composeTopBar(eui::Ui& ui, AppState& state, const PageRect& area)
         reloadData(state);
     });
 
+    // 第二行：周范围（左） + 搜索框（右） + 命中数
+    const float subY = area.y + kTopBarHeight;
+    const float searchWidth = 260.0f;
+    const float searchX = area.x + area.width - searchWidth;
+
     ui.text("week.range")
-        .position(area.x + 336.0f, y + 7.0f)
-        .size(std::max(120.0f, area.width - 336.0f - 360.0f), kLineCaption)
+        .position(area.x, subY + 10.0f)
+        .size(std::max(120.0f, searchX - area.x - 24.0f), kLineCaption)
         .text(app::weekRangeLabel(state.weekStart))
         .fontSize(kFontRange)
         .color(colors::kText)
+        .build();
+
+    components::input(ui, "week.search")
+        .position(searchX, subY)
+        .size(searchWidth, 36.0f)
+        .fontSize(kFontCaption)
+        .placeholder("搜索：原文 / 标题 / 标签")
+        .value(state.searchText)
+        .onChange([&state](const std::string& value) { state.searchText = value; })
         .build();
 }
 
@@ -239,7 +254,10 @@ void composeDayColumn(eui::Ui& ui, AppState& state, const DayColumn& column, int
                 ui.stack(itemId)
                     .position(6.0f, y)
                     .size(columnWidth - 12.0f, height)
-                    .onClick([&state, entryId = entry->id] { state.selectedId = entryId; })
+                    .onClick([&state, entryId = entry->id, raw = entry->raw_text] {
+                        state.selectedId = entryId;
+                        state.editText   = raw;   // 详情面板的编辑缓冲
+                    })
                     .content([&] {
                         ui.rect(itemId + ".card")
                             .position(0.0f, 0.0f)
@@ -367,11 +385,25 @@ void composeWeekPage(eui::Ui& ui, AppState& state, const PageRect& area)
 {
     composeTopBar(ui, state, area);
 
-    const float gridTop    = area.y + kTopBarHeight;
-    const float gridHeight = std::max(160.0f, area.height - kTopBarHeight);
+    const float gridTop    = area.y + kTopBarHeight + kSubBarHeight;
+    const float gridHeight = std::max(160.0f, area.height - kTopBarHeight - kSubBarHeight);
     const float axisTop    = gridTop + kHeaderHeight;
 
-    const auto columns = app::buildWeek(state.entries, state.weekStart, *std::chrono::current_zone());
+    // 搜索在这里生效：过滤在数据层（app::filterEntries），视图只管画。
+    const auto filtered = app::filterEntries(state.entries, state.searchText);
+    const auto columns  = app::buildWeek(filtered, state.weekStart, *std::chrono::current_zone());
+
+    // 搜索命中反馈（0 条时要明确告诉用户"是没找到"而不是"这周没记录"）
+    if (!state.searchText.empty())
+    {
+        ui.text("week.search.count")
+            .position(area.x + area.width - 380.0f, area.y + kTopBarHeight + 10.0f)
+            .size(120.0f, kLineCaption)
+            .text("找到 " + std::to_string(filtered.size()) + " 条")
+            .fontSize(kFontCaption)
+            .color(filtered.empty() ? colors::kDanger : colors::kMuted)
+            .build();
+    }
 
     // 只要有一列存在"未排时间"的记录，就在轴下面留一条 54px 的条
     bool anyUnplaced = false;

@@ -263,3 +263,29 @@ TEST_CASE("elideToFit：按像素宽度裁到卡片里，超出补省略号")
     // 换行符算一行：1 行装不下第二行 → 在第一行末尾截断
     CHECK(app::elideToFit("a\nb", 100.0f, 20.0f, 1) == "a…");
 }
+TEST_CASE("filterEntries：搜索原文/标题/摘要/标签，空查询返回全部")
+{
+    auto a = makeEntry("明天下午三点跟老张开会", sys_days{ ymd(2026, 10, 27) });
+    a.title = "跟老张讨论排期";
+    a.tags  = { "会议", "排期" };
+
+    auto b = makeEntry("读到一篇 C++ 的文章", sys_days{ ymd(2026, 10, 28) });
+    b.title = "C++ expected";
+
+    auto deleted = makeEntry("老张的旧记录", sys_days{ ymd(2026, 10, 29) });
+    deleted.deleted_at = sys_days{ ymd(2026, 10, 30) };
+
+    const std::vector<core::Entry> all{ a, b, deleted };
+
+    CHECK(app::filterEntries(all, "").size() == 2);            // 空查询 = 全部（不含墓碑）
+    CHECK(app::filterEntries(all, "老张").size() == 1);         // 命中 a 的原文
+    CHECK(app::filterEntries(all, "讨论排期").size() == 1);      // 命中 a 的标题
+    CHECK(app::filterEntries(all, "C++").size() == 1);          // 命中 b 的标题
+    CHECK(app::filterEntries(all, "c++").size() == 1);          // ASCII 不分大小写
+    CHECK(app::filterEntries(all, "排期").size() == 1);          // 命中 tags
+
+    // 已删除的不出现（即使原文命中）
+    CHECK(app::filterEntries(all, "旧记录").empty());
+
+    CHECK(app::filterEntries(all, "不存在的词").empty());
+}
