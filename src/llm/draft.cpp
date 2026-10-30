@@ -133,4 +133,86 @@ std::expected<DraftFields, DraftError> extractDraft(IChatClient& client, std::st
     return fields;
 }
 
+namespace
+{
+
+std::string timeDraftPrompt(std::string const& rawText, std::string const& todayLocal)
+{
+    return "你只负责从一句话里读出时间，输出 JSON，不要解释、不要代码块。\n"
+           "\n"
+           "今天是（本地日期）：" + todayLocal + "。据此把「明天」「下周三」这类相对说法换算成具体日期。\n"
+           "\n"
+           "输出格式（两个字段，没有就写 null）：\n"
+           "{\"start\":\"YYYY-MM-DD HH:MM\",\"end\":\"YYYY-MM-DD HH:MM\"}\n"
+           "\n"
+           "规则：\n"
+           "- 一律 24 小时制，两位数补零（08:30、17:00）\n"
+           "- 原文只写了日期、没写时刻 → 时刻用 00:00\n"
+           "- 原文没有结束时间 → end 为 null，**不要自己编一个时长**\n"
+           "- 原文里根本没有时间信息 → start 和 end 都为 null\n"
+           "- 拿不准就写 null，绝不猜\n"
+           "\n"
+           "用户记录：" + rawText;
+}
+
+/** 从 JSON 里取一个"时间字符串或 null"。非字符串一律当空。 */
+std::optional<std::string> optionalString(nlohmann::json const& object, char const* key)
+{
+    if (!object.contains(key)) { return std::nullopt; }
+
+    const auto& value = object[key];
+    if (!value.is_string()) { return std::nullopt; }
+
+    std::string text = value.get<std::string>();
+    if (text.empty()) { return std::nullopt; }
+    return text;
+}
+
+}  // namespace
+
+std::expected<TimeDraftFields, DraftError> extractTimeDraft(IChatClient&       client,
+                                                            std::string const& rawText,
+                                                            std::string const& todayLocal)
+{
+    ChatRequest request;
+    request.messages.push_back({ Message::Role::User, timeDraftPrompt(rawText, todayLocal) });
+    request.maxTokens   = 128;
+    request.temperature = 0.0;   // 抽时间不需要创意，要稳定
+
+    auto reply = client.complete(request);
+    if (!reply)
+    {
+        return std::unexpected(DraftError{ reply.error().retryable(), reply.error().message });
+    }
+
+    nlohmann::json parsed;
+    try
+    {
+        parsed = nlohmann::json::parse(stripFence(reply->text));
+    }
+    catch (std::exception const& ex)
+    {
+        return std::unexpected(badResponse(std::string{"回复不是合法 JSON: "} + ex.what()));
+    }
+
+    if (!parsed.is_object()) { return std::unexpected(badResponse("回复顶层不是 JSON 对象")); }
+
+    TimeDraftFields fields;
+    fields.startLocal = optionalString(parsed, "start");
+    fields.endLocal   = optionalString(parsed, "end");
+
+    if (!fields.startLocal && !fields.endLocal)
+    {
+        // 模型说"这句子没有时间" —— 这是**合法**结果，不是错误。
+        // 内容草稿那边不同：summary 为空要报错。区别在于这里"没有时间"是正常语义。
+        fields.startLocal = std::nullopt;
+    }
+    else if (!fields.startLocal && fields.endLocal)
+    {
+        return std::unexpected(badResponse("有 end 却没有 start"));
+    }
+
+    return fields;
+}
+
 }  // namespace llm

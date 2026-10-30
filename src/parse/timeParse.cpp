@@ -399,7 +399,10 @@ namespace parse
 
             // 「下午3点到5点」——第二个钟点没写时段词就沿用同一个，所以那个 5点 也算 17:00。
             // ⚠️ 它自己写了就用自己的：「晚上11点到凌晨1点」的 1点 是 01:00，不是 13:00。
-            for( const std::string_view sep : { "到", "至" } )
+            //
+            // 分隔符除了「到/至」，也认波浪号：`8:30~10:30`、`8:30～10:30`（全角）。
+            // 后者是中文输入法下最顺手的写法，和全角冒号是同一类坑。
+            for( const std::string_view sep : { "到", "至", "~", "～" } )
             {
                 if( !at(s, pos, sep) )
                 {
@@ -839,7 +842,7 @@ namespace parse
 
         if( date )
         {
-            for( const std::string_view sep : { "到", "至" } )
+            for( const std::string_view sep : { "到", "至", "~", "～" } )
             {
                 // 「周一 到 周五」也认：CLI 拼参数时会在「到」两边留空格。
                 const std::size_t sepPos = skipSpaces(raw_text, pos);

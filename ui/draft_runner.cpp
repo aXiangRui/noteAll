@@ -11,6 +11,8 @@
 #include <vector>
 
 #include "app/api_key.hpp"
+#include "app/entry_service.hpp"
+#include "app/time_input.hpp"
 #include "app_state.hpp"
 #include "core/core.hpp"
 #include "llm/draft.hpp"
@@ -25,11 +27,14 @@ namespace
 struct Result
 {
     bool                     hasResult = false;
+    DraftTask                task = DraftTask::Content;
     std::string              entryId;
     std::string              title;
     std::string              summary;
     std::vector<std::string> tags;
     std::string              kind;
+    std::string              startLocal;   // Time 任务才有
+    std::string              endLocal;
     std::string              error;
 };
 
@@ -76,7 +81,7 @@ bool draftBusy()
     return g_running;
 }
 
-bool startDraftInBackground(std::string entryId, std::string rawText)
+bool startDraftInBackground(std::string entryId, std::string rawText, DraftTask task)
 {
     {
         std::lock_guard<std::mutex> lock(g_mutex);
@@ -88,16 +93,22 @@ bool startDraftInBackground(std::string entryId, std::string rawText)
         g_result  = Result{};
     }
 
-    std::thread worker([entryId = std::move(entryId), rawText = std::move(rawText)] {
+    // 「今天」必须在主线程算好再传进去：worker 里再算一次可能跨天，
+    // 而且模型需要的是**调用时**的今天，不是"跑完时的今天"。
+    const std::string todayLocal = app::formatLocalDateTime(app::nowUtc(), *std::chrono::current_zone()).substr(0, 10);
+
+    std::thread worker([entryId = std::move(entryId), rawText = std::move(rawText), task,
+                        todayLocal] {
         Result result;
         result.entryId = entryId;
+        result.task    = task;
 
         auto client = makeClient();
         if (!client)
         {
             result.error = client.error();
         }
-        else
+        else if (task == DraftTask::Content)
         {
             auto fields = llm::extractDraft(**client, rawText);
             if (!fields)
@@ -110,6 +121,19 @@ bool startDraftInBackground(std::string entryId, std::string rawText)
                 result.summary = fields->summary;
                 result.tags    = fields->tags;
                 result.kind    = fields->kind;
+            }
+        }
+        else
+        {
+            auto fields = llm::extractTimeDraft(**client, rawText, todayLocal);
+            if (!fields)
+            {
+                result.error = fields.error().message;
+            }
+            else
+            {
+                result.startLocal = fields->startLocal.value_or("");
+                result.endLocal   = fields->endLocal.value_or("");
             }
         }
 
@@ -135,6 +159,23 @@ bool pollDraftResult(AppState& state)
         }
         done      = std::move(g_result);
         g_result  = Result{};
+    }
+
+    // ---- 时间草稿：结果只填进编辑框，让用户看一眼再保存 ----
+    // 时间改错比标题改错严重得多（会跳到别的日子），所以**绝不自动落盘**。
+    if (done.task == DraftTask::Time)
+    {
+        if (!done.error.empty())
+        {
+            state.timeError = done.error;
+        }
+        else
+        {
+            state.editStart = done.startLocal;
+            state.editEnd   = done.endLocal;
+            state.timeError = done.startLocal.empty() ? "模型认为这句里没有时间" : "";
+        }
+        return true;
     }
 
     // 先在内存快照里改，再落盘（core 的 update 会自己加锁 + 重读）

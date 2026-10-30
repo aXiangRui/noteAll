@@ -10,6 +10,7 @@
 //   左侧 58px 刻度槽（00:00 / 06:00 / 12:00 / 18:00 / 24:00）
 //   七列等宽；列内 24h 轴高度 = 列高 - 列头 - 底部"未排时间"条
 
+#include "app/time_input.hpp"
 #include "draft_runner.hpp"
 #include "pages.hpp"
 
@@ -254,9 +255,22 @@ void composeDayColumn(eui::Ui& ui, AppState& state, const DayColumn& column, int
                 ui.stack(itemId)
                     .position(6.0f, y)
                     .size(columnWidth - 12.0f, height)
-                    .onClick([&state, entryId = entry->id, raw = entry->raw_text] {
+                    .onClick([&state, entryId = entry->id, raw = entry->raw_text,
+                              startText = entry->occurred
+                                              ? app::formatLocalDateTime(
+                                                    entry->occurred->start,
+                                                    *std::chrono::current_zone())
+                                              : std::string{},
+                              endText = (entry->occurred && entry->occurred->end)
+                                            ? app::formatLocalDateTime(
+                                                  *entry->occurred->end,
+                                                  *std::chrono::current_zone())
+                                            : std::string{}] {
                         state.selectedId = entryId;
-                        state.editText   = raw;   // 详情面板的编辑缓冲
+                        state.editText   = raw;         // 内容缓冲
+                        state.editStart  = startText;   // 时间缓冲（可直接改）
+                        state.editEnd    = endText;
+                        state.timeError.clear();
                     })
                     .content([&] {
                         ui.rect(itemId + ".card")

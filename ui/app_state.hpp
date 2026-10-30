@@ -39,8 +39,11 @@ struct AppState
     // 搜索（顶栏第二行的输入框）；空 = 不过滤
     std::string               searchText;
 
-    // 详情面板里的编辑缓冲（打开时从 raw_text 填
+    // 详情面板里的编辑缓冲（打开时从 raw_text 填）
     std::string               editText;
+    std::string               editStart;   // 开始时间文本：2026-10-30 08:30
+    std::string               editEnd;     // 结束时间文本（空 = 没有结束）
+    std::string               timeError;
     bool                      loaded = false;
 };
 

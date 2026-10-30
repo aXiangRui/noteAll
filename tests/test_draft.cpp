@@ -112,3 +112,60 @@ TEST_CASE("draft：网络错误原样透传 retryable，不再自己判断")
     REQUIRE_FALSE(auth.has_value());
     CHECK_FALSE(auth.error().retryable);      // 401 不可重试
 }
+
+// ---------------------------------------------------------------------------
+// timeDraft：只推时间，不碰标题。结果只填编辑框，不自动落盘。
+// ---------------------------------------------------------------------------
+
+TEST_CASE("timeDraft：正常返回 start / end")
+{
+    testutil::FakeChatClient client({ replyWith(
+        R"({"start":"2026-10-30 08:30","end":"2026-10-30 10:00"})") });
+
+    auto fields = llm::extractTimeDraft(client, "明天八点半到十点开会", "2026-10-29");
+    REQUIRE(fields.has_value());
+    REQUIRE(fields.value().startLocal.has_value());
+    CHECK(*fields.value().startLocal == "2026-10-30 08:30");
+    REQUIRE(fields.value().endLocal.has_value());
+    CHECK(*fields.value().endLocal == "2026-10-30 10:00");
+}
+
+TEST_CASE("timeDraft：没有结束时间时 end 为 null（不编造时长）")
+{
+    testutil::FakeChatClient client({ replyWith(R"({"start":"2026-10-30 08:30","end":null})") });
+
+    auto fields = llm::extractTimeDraft(client, "8:30开会", "2026-10-29");
+    REQUIRE(fields.has_value());
+    REQUIRE(fields.value().startLocal.has_value());
+    CHECK_FALSE(fields.value().endLocal.has_value());   // ★ 不假设 1 小时
+}
+
+TEST_CASE("timeDraft：模型说「这句没时间」是合法结果，不是错误")
+{
+    testutil::FakeChatClient client({ replyWith(R"({"start":null,"end":null})") });
+
+    auto fields = llm::extractTimeDraft(client, "记一个想法", "2026-10-29");
+    REQUIRE(fields.has_value());
+    CHECK_FALSE(fields.value().startLocal.has_value());
+    CHECK_FALSE(fields.value().endLocal.has_value());
+}
+
+TEST_CASE("timeDraft：有 end 没 start 属于坏响应")
+{
+    testutil::FakeChatClient client({ replyWith(R"({"start":null,"end":"2026-10-30 10:00"})") });
+
+    auto fields = llm::extractTimeDraft(client, "x", "2026-10-29");
+    REQUIRE_FALSE(fields.has_value());
+    CHECK(fields.error().message.find("end") != std::string::npos);
+}
+
+TEST_CASE("timeDraft：坏 JSON / 网络错误照旧透传")
+{
+    testutil::FakeChatClient badJson({ replyWith("我觉得是明天") });
+    CHECK_FALSE(llm::extractTimeDraft(badJson, "x", "2026-10-29").has_value());
+
+    testutil::FakeChatClient auth({ std::unexpected(chatError(llm::ChatErrorKind::Auth, "401")) });
+    auto failed = llm::extractTimeDraft(auth, "x", "2026-10-29");
+    REQUIRE_FALSE(failed.has_value());
+    CHECK_FALSE(failed.error().retryable);
+}
