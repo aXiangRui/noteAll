@@ -57,6 +57,23 @@ namespace core
         Done,
     };
 
+    /**
+     * 记录里的 occurred 是谁给的。
+     *
+     * 为什么要记：规则解析和模型抽取是两条完全不同的路径 ——
+     *   Rule   —— 规则命中（确定性、可测、免费）
+     *   Ai     —— 模型建议、用户采纳（要花钱、有概率）
+     *   Manual —— 用户在详情面板手改（最高优先级）
+     * 没有这个字段，就永远只能凭感觉判断"规则够不够用"。
+     */
+    enum class TimeSource
+    {
+        None,     // 时间未知（或已清除）
+        Rule,     // 规则解析器给的
+        Ai,       // 模型建议、被采纳
+        Manual,   // 手动改的
+    };
+
     struct Entry
     {
         std::string              id;           // 短随机 id，见 ROADMAP.md §2.5
@@ -81,6 +98,11 @@ namespace core
         DraftStatus draft_status   = DraftStatus::None;
         int         draft_attempts = 0;
         std::string draft_error;               // 最后一次失败的原因（给人看的）
+
+        // 这个时间是谁给的（见 TimeSource）。
+        // 没有它就只能凭感觉判断"规则够不够用"；有了它可以直接统计
+        // rule / ai / manual 的分布，把 ai 那些原文变成下一批该补的规则。
+        TimeSource  occurred_source = TimeSource::None;
     };
 
     // 枚举 <-> 字符串。存字符串不存数字，见 docs/nlohmann-json.md §4.3。
@@ -99,4 +121,9 @@ namespace core
 
     // 同上：认不出按 None 处理（当作"还没生成过"，安全）。
     DraftStatus draftStatusFromString(std::string_view s);
+
+    std::string toString(TimeSource s);
+
+    // 认不出按 None（当作"时间未知"，安全）。
+    TimeSource timeSourceFromString(std::string_view s);
 }  // namespace core

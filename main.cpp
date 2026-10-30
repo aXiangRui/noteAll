@@ -11,6 +11,8 @@
 // 规格见 docs/ROADMAP.md §2.6。
 
 #include "app/calendar.hpp"
+#include "app/corpus.hpp"
+#include "app/time_input.hpp"
 #include "app/entry_service.hpp"
 #include "core/core.hpp"
 #include "core/note_log.hpp"
@@ -175,6 +177,7 @@ void printHelp(std::ostream& os)
           "  note draft --force     连已完成的也重新生成（改了提示词后用）\n"
           "  note draft --id <id>   只补某一条\n"
           "  note parse <文本...>    只试一下时间解析，不写盘（排查「为什么不识别」用）\n"
+          "  note parse --corpus    跑一遍解析语料（tests/corpus/parse-cases.txt）\n"
           "  note help               显示这个帮助\n"
           "\n"
           "  直接运行 note（不带参数）进入交互模式，命令里不用再写开头的 note：\n"
@@ -395,8 +398,56 @@ int execute(const std::vector<std::string>& args,
     {
         if (args.size() < 3)
         {
-            v.RenderError("用法：note parse <文本...>");
+            v.RenderError("用法：note parse <文本...>　或　note parse --corpus [文件]");
             return 1;
+        }
+
+        // ---- 语料批量回归：把「采纳 AI 时间」的样本当规则用例跑一遍 ----
+        if (args[2] == "--corpus")
+        {
+            const std::filesystem::path corpusFile =
+                args.size() >= 4 ? std::filesystem::path{ args[3] }
+                                 : std::filesystem::path{ "tests/corpus/parse-cases.txt" };
+
+            auto cases = app::loadParseCases(corpusFile, *std::chrono::current_zone());
+            if (!cases)
+            {
+                // 这里还没到统一的 fail() 出口（它在参数校验之后才定义），
+                // 所以照同样的规则手动记一条日志再返回。
+                core::appendLog(dataFile, core::LogLevel::Error, cases.error());
+                v.RenderError(cases.error());
+                return 2;
+            }
+
+            if (cases->empty())
+            {
+                v.RenderMessage("语料是空的: " + corpusFile.string());
+                return 0;
+            }
+
+            const auto tz       = std::chrono::current_zone();
+            const auto outcomes = app::runParseCases(*cases, *tz);
+
+            int passed = 0;
+            for (const auto& outcome : outcomes)
+            {
+                const bool ok = outcome.startOk && outcome.endOk;
+                if (ok) { ++passed; }
+
+                const auto show = [&tz](const std::optional<std::chrono::sys_seconds>& value) {
+                    return value ? app::formatLocalDateTime(*value, *tz) : std::string{ "-" };
+                };
+
+                std::cout << (ok ? "✓ " : "✗ ") << outcome.parseCase.text << '\n'
+                          << "    期望 " << show(outcome.parseCase.start);
+                if (outcome.parseCase.end) { std::cout << " → " << show(outcome.parseCase.end); }
+                std::cout << "\n    实际 " << (outcome.gotStart.empty() ? "-" : outcome.gotStart);
+                if (!outcome.gotEnd.empty()) { std::cout << " → " << outcome.gotEnd; }
+                std::cout << '\n';
+            }
+
+            v.RenderMessage(std::to_string(passed) + "/" + std::to_string(outcomes.size()) + " 通过");
+            return passed == static_cast<int>(outcomes.size()) ? 0 : 2;
         }
 
         const std::string parsedText = joinArgs(args, 2);

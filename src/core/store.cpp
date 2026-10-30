@@ -116,6 +116,7 @@ void to_json(nlohmann::json& j, const Entry& e)
         {"confirmed",  e.confirmed},
         {"source",     toString(e.source)},
         {"draft_status", toString(e.draft_status)},
+        {"time_source",  toString(e.occurred_source)},
     };
 
     // 只在非默认时写这两个字段：绝大多数记录没有失败史，省得每行都拖两个空值。
@@ -144,7 +145,8 @@ void from_json(const nlohmann::json& j, Entry& e)
     e.kind      = kindFromString(j.value("kind", std::string{}));
     e.confirmed = j.value("confirmed", false);
     e.source    = sourceFromString(j.value("source", std::string{"manual"}));
-    e.draft_status   = draftStatusFromString(j.value("draft_status", std::string{"none"}));
+    e.draft_status    = draftStatusFromString(j.value("draft_status", std::string{"none"}));
+    e.occurred_source = timeSourceFromString(j.value("time_source", std::string{"none"}));
     e.draft_attempts = j.value("draft_attempts", 0);
     e.draft_error    = j.value("draft_error", std::string{});
 

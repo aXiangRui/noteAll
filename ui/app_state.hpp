@@ -44,6 +44,8 @@ struct AppState
     std::string               editStart;   // 开始时间文本：2026-10-30 08:30
     std::string               editEnd;     // 结束时间文本（空 = 没有结束）
     std::string               timeError;
+    std::string               aiStart;    // AI 建议的时间（用于判断是否采纳）
+    std::string               aiEnd;
     bool                      loaded = false;
 };
 

@@ -173,6 +173,8 @@ bool pollDraftResult(AppState& state)
         {
             state.editStart = done.startLocal;
             state.editEnd   = done.endLocal;
+            state.aiStart   = done.startLocal;   // 记下来源：保存时判断是"采纳"还是"手改"
+            state.aiEnd     = done.endLocal;
             state.timeError = done.startLocal.empty() ? "模型认为这句里没有时间" : "";
         }
         return true;

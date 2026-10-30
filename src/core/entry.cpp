@@ -103,4 +103,35 @@ namespace core
         // 认不出按 None：当作"还没生成过"，最安全（不会误以为已经有草稿）。
         return DraftStatus::None;
     }
+
+    std::string toString(TimeSource s)
+    {
+        switch (s)
+        {
+            case TimeSource::None:   return "none";
+            case TimeSource::Rule:   return "rule";
+            case TimeSource::Ai:     return "ai";
+            case TimeSource::Manual: return "manual";
+        }
+
+        assert(false && "toString: TimeSource 有未处理的新值");
+        return "none";
+    }
+
+    TimeSource timeSourceFromString(std::string_view s)
+    {
+        constexpr std::array<TimeSource, 4> ALL = {
+            TimeSource::None, TimeSource::Rule, TimeSource::Ai, TimeSource::Manual,
+        };
+
+        for (const TimeSource source : ALL)
+        {
+            if (toString(source) == s)
+            {
+                return source;
+            }
+        }
+        // 认不出按 None：当作"时间未知"，不会让旧文件读不出来。
+        return TimeSource::None;
+    }
 }

@@ -119,7 +119,8 @@ std::expected<void, std::string> Core::reloadForMutation()
 
 std::expected<Entry, std::string> Core::add(std::string_view         rawText,
                                             std::chrono::sys_seconds createdAt,
-                                            std::optional<TimeRange> occurred)
+                                            std::optional<TimeRange> occurred,
+                                            TimeSource               source)
 {
     // 1) 锁 + 重读：拿磁盘上的最新状态，别用启动时的旧快照。
     auto lock = FileLock::acquire(path_);
@@ -143,6 +144,9 @@ std::expected<Entry, std::string> Core::add(std::string_view         rawText,
 
     // 解析结果原样收下。空 = 解析器没认出来，保持"时间未知"，不猜。
     e.occurred = std::move(occurred);
+
+    // 时间来源：没有时间就必须是 None —— 不能出现"时间未知但来源写着规则"。
+    e.occurred_source = e.occurred ? source : TimeSource::None;
 
     // tags / kind / confirmed 保持默认（空、Unknown、false）——
     // 那些是 M2 的事。source 默认 Manual，导入路径由调用方改。

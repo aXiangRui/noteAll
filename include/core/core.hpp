@@ -40,9 +40,13 @@ public:
     //
     // occurred 是解析器的结果（可空）。core 不认识 parse，也不该认识 ——
     // 谁解析谁负责，core 只负责把结果存下来。
+    //
+    // source 说明这个时间是"谁给的"（规则 / 模型 / 手改）。不传就按 Rule 算，
+    // 没有 occurred 时一律记 None —— 不能出现"时间未知但来源写着规则"这种自相矛盾。
     std::expected<Entry, std::string> add(std::string_view      rawText,
                                           std::chrono::sys_seconds createdAt,
-                                          std::optional<TimeRange> occurred = std::nullopt);
+                                          std::optional<TimeRange> occurred = std::nullopt,
+                                          TimeSource               source = TimeSource::Rule);
 
     // 按 created_at 倒序（新的在前）。**不含已删除的**（墓碑对上层不可见）。
     const std::vector<Entry>& list() const;

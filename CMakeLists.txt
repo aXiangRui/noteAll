@@ -98,6 +98,7 @@ target_link_libraries(parse PUBLIC core)
 add_library(app
     src/app/api_key.cpp
     src/app/calendar.cpp
+    src/app/corpus.cpp
     src/app/entry_service.cpp
     src/app/time_input.cpp)
 target_include_directories(app PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)

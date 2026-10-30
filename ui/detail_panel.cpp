@@ -12,6 +12,7 @@
 #include <optional>
 #include <string>
 
+#include "app/corpus.hpp"
 #include "app/entry_service.hpp"
 #include "app/time_input.hpp"
 #include "core/core.hpp"
@@ -202,13 +203,30 @@ void composeDetailPanel(eui::Ui& ui, AppState& state, const PageRect& area)
                           }
                       }
 
-                      core::Entry entry = *found;
-                      entry.occurred    = core::TimeRange{ *startUtc, endUtc };
+                      // 判断这次保存是"采纳 AI 建议"还是"手改"：
+                      // 文本和 AI 给的一模一样才算采纳（用户动过就不算）。
+                      const bool fromAi = !state.aiStart.empty() &&
+                                          state.editStart == state.aiStart &&
+                                          state.editEnd == state.aiEnd;
+
+                      core::Entry entry   = *found;
+                      entry.occurred      = core::TimeRange{ *startUtc, endUtc };
+                      entry.occurred_source = fromAi ? core::TimeSource::Ai
+                                                     : core::TimeSource::Manual;
 
                       if (auto updated = note.update(entry); !updated)
                       {
                           state.error = updated.error();
                           return;
+                      }
+
+                      // 采纳 AI 的时间 = 一条真实语料：存下来，以后拿来补规则。
+                      if (fromAi)
+                      {
+                          app::appendParseCase("tests/corpus/parse-cases.txt",
+                                               app::ParseCase{ entry.raw_text, entry.created_at,
+                                                               *startUtc, endUtc },
+                                               *std::chrono::current_zone());
                       }
 
                       state.timeError.clear();
@@ -224,6 +242,7 @@ void composeDetailPanel(eui::Ui& ui, AppState& state, const PageRect& area)
 
                       core::Entry entry = *found;
                       entry.occurred.reset();
+                      entry.occurred_source = core::TimeSource::None;
                       if (auto updated = note.update(entry); !updated)
                       {
                           state.error = updated.error();
@@ -317,6 +336,8 @@ void composeDetailPanel(eui::Ui& ui, AppState& state, const PageRect& area)
                       core::Entry entry = *found;
                       entry.raw_text    = state.editText;
                       entry.occurred    = app::occurredFromText(entry.raw_text, entry.created_at);
+                      entry.occurred_source = entry.occurred ? core::TimeSource::Rule
+                                                             : core::TimeSource::None;
 
                       // 原文变了，旧标题/摘要就成了过期数据 —— 打回 pending 等重生成。
                       entry.draft_status   = core::DraftStatus::Pending;
