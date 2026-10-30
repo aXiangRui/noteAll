@@ -1101,3 +1101,33 @@ TEST_CASE("缩略词自带时段：今早 / 今晚 / 明早 / 明晚")
     // 缩略词后面的话要原样留下
     CHECK(parse::parseTime("今早和小李跑步", BASE).remainder == "和小李跑步");
 }
+
+// ---------------------------------------------------------------------------
+// 全角冒号：8：30（中文输入法默认打出来的就是这个）
+//
+// 这类 bug 属于"静默失败"：以前只认半角 ":"，全角输入时整段时间悄悄留空，
+// 用户只看到卡片跑到 00:00，没有任何报错。
+// ---------------------------------------------------------------------------
+
+TEST_CASE("全角冒号 8：30 与半角 8:30 等价")
+{
+    CHECK(startedAt("8:30") == startedAt("8：30"));          // 08:30
+    CHECK(startedAt("8：30") == date(2026, 10, 8) + 8h + 30min);
+
+    // 带时段词：下午 15:30
+    CHECK(startedAt("下午3：30") == date(2026, 10, 8) + 15h + 30min);
+    CHECK(startedAt("下午3：30") == startedAt("下午3:30"));
+
+    // 后面还有正文，剩余文本要正确
+    const auto withText = parse::parseTime("早上8：30跑步", BASE);
+    REQUIRE(withText.occurred.has_value());
+    CHECK(withText.occurred->start == date(2026, 10, 8) + 8h + 30min);
+    CHECK(withText.remainder == "跑步");
+
+    // 区间两头都是全角
+    const auto span = parse::parseTime("8：30到10：30", BASE);
+    REQUIRE(span.occurred.has_value());
+    REQUIRE(span.occurred->end.has_value());
+    CHECK(span.occurred->start == date(2026, 10, 8) + 8h + 30min);
+    CHECK(*span.occurred->end  == date(2026, 10, 8) + 10h + 30min);
+}

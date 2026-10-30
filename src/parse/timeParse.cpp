@@ -14,6 +14,25 @@ namespace parse
             return pos <= s.size() && s.substr(pos).starts_with(lit);
         }
 
+        // 冒号的字节长度：半角 ":" 是 1 字节，全角 "："（U+FF1A）是 3 字节。
+        // 返回 0 表示这里不是冒号。
+        //
+        // 为什么必须两种都认：中文输入法下敲时间，十有八九打出的是全角冒号
+        // 「8：30」。以前只认半角，于是这类输入**整段时间都解析不出来**，
+        // 而且不会报错，只是悄悄留空 —— 用户根本不知道发生了什么。
+        std::size_t colonLength(std::string_view s, std::size_t pos)
+        {
+            if( at(s, pos, ":") )
+            {
+                return 1;
+            }
+            if( at(s, pos, "：") )
+            {
+                return 3;
+            }
+            return 0;
+        }
+
         // 跳过一段空白。
         //
         // 为什么需要：CLI 的 `note add 明天 下午3点` 会把 argv 用空格拼成
@@ -249,10 +268,10 @@ namespace parse
         // 只试钟点本身，不试时段词。period 可以是空的 —— 空表示前面没写时段词。
         std::optional<ClockHit> matchClockNumber(std::string_view s, std::string_view period)
         {
-            // 形式甲：15:30
-            if( const auto h = readNumber(s, 1, 2); h && at(s, h->second, ":") )
+            // 形式甲：15:30 / 15：30（全角冒号）
+            if( const auto h = readNumber(s, 1, 2); h && colonLength(s, h->second) > 0 )
             {
-                const std::size_t minutePos = h->second + 1;
+                const std::size_t minutePos = h->second + colonLength(s, h->second);
                 const auto        m         = readNumber(s.substr(minutePos), 1, 2);
                 if( !m || h->first > 23 || m->first > 59 )
                 {
