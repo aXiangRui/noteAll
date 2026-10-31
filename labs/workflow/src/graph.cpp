@@ -103,6 +103,15 @@ std::expected<Node, GraphError> parseNode(nlohmann::json const& object)
         node.config  = std::move(config);
         break;
     }
+    case NodeType::Script:
+    {
+        ScriptConfig config;
+        config.script = readString(object, "script");
+        const auto entry = readString(object, "entry");
+        if (!entry.empty()) { config.entry = entry; }
+        node.config      = std::move(config);
+        break;
+    }
     }
 
     return node;

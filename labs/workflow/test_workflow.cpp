@@ -1,5 +1,9 @@
 #include <doctest/doctest.h>
 
+#include <cstdio>
+#include <filesystem>
+#include <fstream>
+#include <iterator>
 #include <ostream>
 #include <string>
 #include <vector>
@@ -9,6 +13,8 @@
 #include "workflow/engine.hpp"
 #include "workflow/graph.hpp"
 #include "workflow/node.hpp"
+#include "workflow/lua_runtime.hpp"
+#include "workflow/lua_runtime.hpp"
 #include "workflow/node_registry.hpp"
 #include "workflow/run_context.hpp"
 
@@ -504,4 +510,217 @@ TEST_CASE("flow：同一个图跑两次结果一样（插值不污染原图）")
         CHECK(run.ok);
         CHECK(run.output == "来自输入");
     }
+}
+
+// ---------------------------------------------------------------------------
+// Script 节点（Lua）
+// ---------------------------------------------------------------------------
+
+namespace
+{
+
+std::filesystem::path writeScript(char const* name, std::string const& body)
+{
+    const auto dir = std::filesystem::temp_directory_path() / "noteall-lua-test";
+    std::filesystem::create_directories(dir);
+    const auto file = dir / name;
+    std::ofstream out(file, std::ios::binary | std::ios::trunc);
+    out << body;
+    out.close();
+    return file;
+}
+
+// 让文件"确实变新"：NTFS 时间戳够细，但连续两次写太快可能落同一 tick
+void bumpMtime(std::filesystem::path const& file)
+{
+    std::error_code ec;
+    const auto      now = std::filesystem::last_write_time(file, ec);
+    std::filesystem::last_write_time(file, now + std::chrono::seconds(2), ec);
+}
+
+}  // namespace
+
+TEST_CASE("script：Lua 脚本能读写 input，返回表当输出")
+{
+    const auto file = writeScript("basic.lua", R"(
+function run(input)
+    return { category = "餐饮", amount = input.amount * 2 }
+end
+)");
+
+    workflow::ScriptRuntime runtime;
+    auto                    result = runtime.call(file, "run", nlohmann::json{ { "amount", 21 } });
+
+    REQUIRE(result.has_value());
+    CHECK((*result)["category"] == "餐饮");
+    CHECK((*result)["amount"] == 42);
+}
+
+TEST_CASE("script：热重载 —— 文件改了立刻生效，不用重启")
+{
+    const auto file = writeScript("reload.lua", R"(
+function run(input) return { tag = "v1" } end
+)");
+
+    workflow::ScriptRuntime runtime;
+
+    const auto first = runtime.call(file, "run", nlohmann::json::object());
+    REQUIRE(first.has_value());
+    CHECK((*first)["tag"] == "v1");
+
+    // 改脚本（并确保 mtime 变新）
+    writeScript("reload.lua", R"(
+function run(input) return { tag = "v2" } end
+)");
+    bumpMtime(file);
+
+    const auto second = runtime.call(file, "run", nlohmann::json::object());
+    REQUIRE(second.has_value());
+    CHECK((*second)["tag"] == "v2");   // ★ 没有重启、没有 reload() 调用
+}
+
+TEST_CASE("script：改坏了（语法错）保留旧版本，不让节点失效")
+{
+    const auto file = writeScript("broken.lua", R"(
+function run(input) return { ok = true } end
+)");
+
+    workflow::ScriptRuntime runtime;
+    REQUIRE(runtime.call(file, "run", nlohmann::json::object()).has_value());
+
+    // 用户手滑：少了 end
+    writeScript("broken.lua", "function run(input) return { ok = false }");
+    bumpMtime(file);
+
+    const auto after = runtime.call(file, "run", nlohmann::json::object());
+    REQUIRE(after.has_value());
+    CHECK((*after)["ok"] == true);   // 还是旧行为
+
+    // 错误信息要能看见（界面用它提示"你刚改的脚本有语法错误"）
+    const auto cached = runtime.cachedScripts();
+    REQUIRE(cached.count(file.string()) == 1);
+    CHECK(cached.at(file.string()).find("错误") != std::string::npos);
+}
+
+TEST_CASE("script：死循环被指令预算掐断")
+{
+    const auto file = writeScript("loop.lua", R"(
+function run(input)
+    while true do end
+end
+)");
+
+    workflow::ScriptRuntime runtime{ workflow::ScriptSettings{ 200'000 } };
+
+    const auto result = runtime.call(file, "run", nlohmann::json::object());
+    REQUIRE_FALSE(result.has_value());
+    CHECK(result.error().find("指令上限") != std::string::npos);
+}
+
+TEST_CASE("script：沙箱里没有 io / os / require")
+{
+    const auto file = writeScript("sandbox.lua", R"(
+function run(input)
+    return { io = io == nil, os = os == nil, require_is_nil = require == nil,
+             dofile_is_nil = dofile == nil }
+end
+)");
+
+    workflow::ScriptRuntime runtime;
+    auto                    result = runtime.call(file, "run", nlohmann::json::object());
+
+    REQUIRE(result.has_value());
+    CHECK((*result)["io"] == true);
+    CHECK((*result)["os"] == true);
+    CHECK((*result)["require_is_nil"] == true);
+    CHECK((*result)["dofile_is_nil"] == true);
+}
+
+TEST_CASE("script：作为节点接进图里跑（脚本 → output）")
+{
+    const auto file = writeScript("node.lua", R"(
+function run(input)
+    -- input 的形状和 {{ in.value }} 一致：按上游节点 id 取
+    return { summary = "分类=" .. input["in"].value }
+end
+)");
+
+    // 用占位符拼 JSON：路径里有反斜杠，直接塞进原始字符串会把引号搞乱
+    std::string path    = file.generic_string();
+    std::string jsonText = R"({
+        "id": "script-flow",
+        "nodes": [
+            { "id": "in",     "type": "input",  "fields": [] },
+            { "id": "script", "type": "script", "script": "__SCRIPT_PATH__" },
+            { "id": "out",    "type": "output", "value": "{{ script.summary }}" }
+        ]
+    })";
+
+    jsonText.replace(jsonText.find("__SCRIPT_PATH__"), std::string{ "__SCRIPT_PATH__" }.size(),
+                     path);
+
+    auto graph = workflow::loadGraph(nlohmann::json::parse(jsonText));
+    REQUIRE(graph.has_value());
+    REQUIRE(workflow::validate(*graph).has_value());
+
+    int                         outputCalls = 0;
+    workflow::NodeRegistry      registry    = makeRegistry(outputCalls);
+    workflow::ScriptRuntime     runtime;
+    workflow::addScriptNode(registry, runtime);
+
+    workflow::Runner     runner(registry);
+    workflow::RunContext context;
+
+    workflow::FlowRun run = runner.run(*graph, context, {}).value();
+
+    CHECK(run.ok);
+    CHECK(run.output == "分类=来自输入");
+    CHECK(context.has("script"));   // 脚本的输出也进变量表，下游能用 {{ script.summary }}
+}
+
+// ---------------------------------------------------------------------------
+// 示例流程（examples/ 下的文件必须真的能跑，否则文档就是假的）
+// ---------------------------------------------------------------------------
+
+TEST_CASE("examples：bill-to-ledger 示例能加载、校验、用脚本跑出分类")
+{
+    const auto flowPath =
+        std::filesystem::path{ NOTE_EXAMPLES_DIR } / "examples" / "bill-to-ledger.json";
+
+    std::ifstream in(flowPath, std::ios::binary);
+    REQUIRE_MESSAGE(in.good(), flowPath.string());
+
+    const std::string text{ std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>() };
+
+    auto graph = workflow::loadGraph(nlohmann::json::parse(text));
+    REQUIRE(graph.has_value());
+    REQUIRE(workflow::validate(*graph).has_value());
+
+    int                    outputCalls = 0;
+    workflow::NodeRegistry registry    = makeRegistry(outputCalls);
+
+    // 覆盖 Input：模拟"一笔账单进来"（makeRegistry 的 Input 只返回占位值）
+    registry.add(workflow::NodeType::Input,
+                 [](workflow::Node const&, workflow::RunContext const&) {
+                     return std::expected<workflow::Value, workflow::NodeError>{
+                         workflow::Value{ { "note", "麦当劳午餐" }, { "amount_cents", 3250 } }
+                     };
+                 });
+
+    workflow::ScriptRuntime runtime;
+    workflow::addScriptNode(registry, runtime);
+
+    // 示例里的 script 路径是相对 examples/ 的，测试时切到那个目录
+    const auto previous = std::filesystem::current_path();
+    std::filesystem::current_path(std::filesystem::path{ NOTE_EXAMPLES_DIR });
+
+    workflow::Runner     runner(registry);
+    workflow::RunContext context;
+
+    workflow::FlowRun run = runner.run(*graph, context, {}).value();
+
+    std::filesystem::current_path(previous);
+
+    REQUIRE(run.ok);
+    CHECK(run.output == "餐饮（关键词:麦当劳）");   // 脚本返回英文键，输出模板照常引用
 }

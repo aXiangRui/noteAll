@@ -311,17 +311,27 @@ add_subdirectory(tests)
 option(NOTE_BUILD_LABS "构建 labs/ 下的实验代码（workflow 引擎等）与其测试" OFF)
 
 if(NOTE_BUILD_LABS)
+    # Lua 5.4（vendored 到 third_party/lua，31 个 C 文件）
+    add_library(lua STATIC)
+    file(GLOB LUA_SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/third_party/lua/*.c")
+    target_sources(lua PRIVATE ${LUA_SOURCES})
+    target_include_directories(lua SYSTEM PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/third_party/lua)
+
     add_library(workflow
         labs/workflow/src/engine.cpp
+        labs/workflow/src/lua_runtime.cpp
+        labs/workflow/src/script_node.cpp
         labs/workflow/src/graph.cpp
         labs/workflow/src/node.cpp
         labs/workflow/src/node_registry.cpp
         labs/workflow/src/run_context.cpp)
     target_include_directories(workflow PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/labs/workflow/include)
-    target_link_libraries(workflow PUBLIC third_party)
+    target_link_libraries(workflow PUBLIC third_party lua)
 
     add_executable(workflow_tests
         labs/workflow/test_workflow.cpp
         tests/main.cpp)
     target_link_libraries(workflow_tests PRIVATE workflow third_party)
+    target_compile_definitions(workflow_tests PRIVATE
+        NOTE_EXAMPLES_DIR="${CMAKE_CURRENT_SOURCE_DIR}/labs/workflow")
 endif()

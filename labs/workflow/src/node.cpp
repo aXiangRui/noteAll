@@ -14,6 +14,7 @@ char const* nodeTypeName(NodeType type) noexcept
     case NodeType::Json:   return "json";
     case NodeType::If:     return "if";
     case NodeType::Output: return "output";
+    case NodeType::Script: return "script";
     }
     return "unknown";
 }
@@ -25,6 +26,7 @@ std::optional<NodeType> nodeTypeFromName(std::string_view name)
     if (name == "json") { return NodeType::Json; }
     if (name == "if") { return NodeType::If; }
     if (name == "output") { return NodeType::Output; }
+    if (name == "script") { return NodeType::Script; }
     return std::nullopt;
 }
 
@@ -37,6 +39,7 @@ bool configMatchesType(Node const& node) noexcept
     case NodeType::Json:   return std::holds_alternative<JsonConfig>(node.config);
     case NodeType::If:     return std::holds_alternative<IfConfig>(node.config);
     case NodeType::Output: return std::holds_alternative<OutputConfig>(node.config);
+    case NodeType::Script: return std::holds_alternative<ScriptConfig>(node.config);
     }
     return false;
 }

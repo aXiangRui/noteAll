@@ -8,7 +8,7 @@
 | 目录 | 是什么 | 状态 |
 |---|---|---|
 | `flow/` | 草稿调度队列（取任务 / 重试 / 放弃 / 预算 / 陈旧丢弃） | 桩：`drain` 返回空、`runOne` 未实现 |
-| `workflow/` | 编排引擎（Graph / Node / NodeRegistry / RunContext / Runner） | **执行器已实现，11 条用例全绿**（加载/校验/拓扑/插值/执行/分支/失败策略） |
+| `workflow/` | 编排引擎（Graph / Node / NodeRegistry / RunContext / Runner）+ **Lua 脚本节点** | **18 条用例全绿**：执行器（分支/失败策略）+ Lua（沙箱/指令预算/热重载） |
 
 两者各自带着原来的测试（`test_draft_queue.cpp` / `test_workflow.cpp`）。
 默认不编译；要看它们是否还活着：

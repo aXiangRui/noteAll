@@ -25,6 +25,7 @@ enum class NodeType
     Json,     // 把上游的文本解析成 JSON（结构化输出）
     If,       // 条件分支：选一条边继续
     Output,   // 产出最终结果
+    Script,   // 用 Lua 脚本算（用户可改，可热重载）
 };
 
 char const* nodeTypeName(NodeType type) noexcept;
@@ -69,7 +70,16 @@ struct OutputConfig
     std::string value;    // 例如 "{{ parse.summary }}"
 };
 
-using NodeConfig = std::variant<InputConfig, LlmConfig, JsonConfig, IfConfig, OutputConfig>;
+// Script 节点：逻辑在 .lua 文件里，节点只记"用哪个文件、调哪个函数"。
+// 这样脚本能热重载，而图本身仍然是纯数据（可序列化、可校验）。
+struct ScriptConfig
+{
+    std::string script;              // 例如 "scripts/classify.lua"（相对流程文件所在目录）
+    std::string entry = "run";       // 入口函数名
+};
+
+using NodeConfig =
+    std::variant<InputConfig, LlmConfig, JsonConfig, IfConfig, OutputConfig, ScriptConfig>;
 
 struct Node
 {

@@ -1,0 +1,24 @@
+{
+  "id": "bill-to-ledger",
+  "nodes": [
+    {
+      "id": "in",
+      "title": "一笔账单",
+      "type": "input",
+      "fields": ["note", "amount_cents"]
+    },
+    {
+      "id": "classify",
+      "title": "分类（Lua 脚本，可热重载）",
+      "type": "script",
+      "script": "examples/scripts/classify.lua",
+      "entry": "run"
+    },
+    {
+      "id": "out",
+      "title": "结果",
+      "type": "output",
+      "value": "{{ classify.category }}（{{ classify.basis }}）"
+    }
+  ]
+}
