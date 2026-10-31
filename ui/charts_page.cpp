@@ -231,32 +231,11 @@ std::chrono::year_month currentMonth()
 
 }  // namespace
 
-void composeChartsPage(eui::Ui& ui, AppState& state, const PageRect& area)
+void composeChartsView(eui::Ui& ui, AppState& state, const PageRect& area, float topY)
 {
     if (!state.ledgerLoaded) { reloadLedger(state); }
 
-    const float y0 = area.y + 4.0f;
-
-    composeChip(ui, "charts.prev", area.x, y0, 96.0f, "‹ 上一月", [&state] {
-        state.ledgerMonth -= std::chrono::months{ 1 };
-    });
-
-    composeChip(ui, "charts.now", area.x + 104.0f, y0, 80.0f, "本月", [&state] {
-        state.ledgerMonth = currentMonth();
-    });
-
-    composeChip(ui, "charts.next", area.x + 192.0f, y0, 96.0f, "下一月 ›", [&state] {
-        state.ledgerMonth += std::chrono::months{ 1 };
-    });
-
-    char monthBuffer[16];
-    std::snprintf(monthBuffer, sizeof(monthBuffer), "%d-%02u",
-                  static_cast<int>(state.ledgerMonth.year()),
-                  static_cast<unsigned>(state.ledgerMonth.month()));
-
-    ui.text("charts.month")
-        .position(area.x + 300.0f, y0 + 8.0f).size(160.0f, kLineCaption)
-        .text(monthBuffer).fontSize(kFontRange).color(colors::kText).build();
+    const float y0 = topY;
 
     // 本月合计（用 ledger 层算，和账本页同一个口径）
     ledger::Summary summary;
@@ -266,15 +245,8 @@ void composeChartsPage(eui::Ui& ui, AppState& state, const PageRect& area)
         else { state.ledgerError = loaded.error(); }
     }
 
-    ui.text("charts.totals")
-        .position(area.x + area.width - 420.0f, y0 + 10.0f).size(420.0f, kLineCaption)
-        .text("支出 " + ledger::formatCents(summary.expenseCents) + "　收入 " +
-              ledger::formatCents(summary.incomeCents) + "　结余 " +
-              ledger::formatCents(summary.incomeCents - summary.expenseCents))
-        .fontSize(kFontCaption).color(colors::kMuted).build();
-
     // ---- 两个饼 + 图例 ----
-    const float pieY = y0 + kChipHeight + 12.0f;
+    const float pieY = y0;
 
     composePieWithLegend(ui, "charts.pie.expense", area.x, pieY, "支出构成",
                          summary.byCategory, summary.expenseCents);

@@ -19,11 +19,16 @@ namespace app
 {
 
 // 侧边栏里的模块。加一个模块 = 这里加一项 + 侧边栏加一行 + 写一个 compose 函数。
+enum class LedgerView
+{
+    List,     // 流水列表（默认）
+    Charts,   // 图表（收支构成 / 近 6 个月趋势）
+};
+
 enum class Page
 {
     Week,        // 周视图（当前默认）
-    Ledger,      // 账本（记账流水）
-    Charts,      // 图表（收支构成 / 趋势）
+    Ledger,      // 账本（流水列表 + 图表子视图）
     Settings,    // 设置
 };
 
@@ -56,6 +61,7 @@ struct AppState
     // ---- 账本 ----
     std::vector<ledger::Transaction> ledgerEntries;   // 可见流水（不含软删除）
     std::chrono::year_month          ledgerMonth{};   // 当前看的月份
+    LedgerView                       ledgerView = LedgerView::List;
     std::string                      ledgerError;
     bool                             ledgerLoaded = false;
 

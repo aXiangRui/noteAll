@@ -486,19 +486,28 @@ void composeLedgerPage(eui::Ui& ui, AppState& state, const PageRect& area)
 
     const float y0 = area.y + 4.0f;
 
-    // ---- 顶部：标题 + 月份切换 ----
-    composeChip(ui, "ledger.prev", area.x, y0, 96.0f, "‹ 上一月", [&state] {
+    // ---- 顶部：视图切换 + 月份切换 ----
+    // 图表是账本的**子视图**，不是独立模块 —— 两者看的是同一个月份、同一份数据。
+    composeToggle(ui, "ledger.view.list", area.x, y0 + 4.0f, 72.0f, "列表",
+                  state.ledgerView == LedgerView::List,
+                  [&state] { state.ledgerView = LedgerView::List; });
+
+    composeToggle(ui, "ledger.view.charts", area.x + 80.0f, y0 + 4.0f, 72.0f, "图表",
+                  state.ledgerView == LedgerView::Charts,
+                  [&state] { state.ledgerView = LedgerView::Charts; });
+
+    composeChip(ui, "ledger.prev", area.x + 168.0f, y0, 96.0f, "‹ 上一月", [&state] {
         state.ledgerMonth -= std::chrono::months{ 1 };
     });
 
-    composeChip(ui, "ledger.now", area.x + 104.0f, y0, 80.0f, "本月", [&state] {
+    composeChip(ui, "ledger.now", area.x + 272.0f, y0, 80.0f, "本月", [&state] {
         const std::chrono::zoned_time     zt{ std::chrono::current_zone(), nowUtc() };
         const std::chrono::year_month_day today{
             std::chrono::floor<std::chrono::days>(zt.get_local_time()) };
         state.ledgerMonth = std::chrono::year_month{ today.year(), today.month() };
     });
 
-    composeChip(ui, "ledger.next", area.x + 192.0f, y0, 96.0f, "下一月 ›", [&state] {
+    composeChip(ui, "ledger.next", area.x + 360.0f, y0, 96.0f, "下一月 ›", [&state] {
         state.ledgerMonth += std::chrono::months{ 1 };
     });
 
@@ -508,7 +517,7 @@ void composeLedgerPage(eui::Ui& ui, AppState& state, const PageRect& area)
                   static_cast<unsigned>(state.ledgerMonth.month()));
 
     ui.text("ledger.month")
-        .position(area.x + 300.0f, y0 + 8.0f)
+        .position(area.x + 468.0f, y0 + 8.0f)
         .size(160.0f, kLineCaption)
         .text(monthBuffer)
         .fontSize(kFontRange)
@@ -534,6 +543,14 @@ void composeLedgerPage(eui::Ui& ui, AppState& state, const PageRect& area)
         .color(colors::kMuted)
         .build();
 
+    const float contentTop = y0 + kChipHeight + 12.0f;
+
+    if (state.ledgerView == LedgerView::Charts)
+    {
+        composeChartsView(ui, state, area, contentTop);
+    }
+    else
+    {
     // ---- 汇总 ----
     const auto rows = monthRows(state, state.ledgerMonth);
 
@@ -647,6 +664,8 @@ void composeLedgerPage(eui::Ui& ui, AppState& state, const PageRect& area)
             .text("…还有 " + std::to_string(rows.size() - shown) + " 笔没显示（窗口再大点）")
             .fontSize(kFontCaption).color(colors::kMuted).build();
     }
+
+    }   // ← 列表视图到这里结束
 
     // 导入完成的结果提示（一次性）
     if (!state.ledgerNotice.empty())

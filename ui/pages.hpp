@@ -26,11 +26,12 @@ void composeSidebar(eui::Ui& ui, AppState& state, const PageRect& area);
 // 模块：周视图（默认）
 void composeWeekPage(eui::Ui& ui, AppState& state, const PageRect& area);
 
-// 模块：账本（记账流水列表）
+// 模块：账本（流水列表 + 图表子视图）
 void composeLedgerPage(eui::Ui& ui, AppState& state, const PageRect& area);
 
-// 模块：图表（支出/收入构成 + 近 6 个月趋势）
-void composeChartsPage(eui::Ui& ui, AppState& state, const PageRect& area);
+// 账本的子视图：图表（支出/收入构成 + 近 6 个月趋势）。
+// topY = 从哪一行开始画（账本页标签栏下面）；月份切换由账本页统一提供，这里不再重复。
+void composeChartsView(eui::Ui& ui, AppState& state, const PageRect& area, float topY);
 
 // 模块：设置
 void composeSettingsPage(eui::Ui& ui, AppState& state, const PageRect& area);
