@@ -220,7 +220,7 @@ TEST_CASE("flow：插值替换引用，缺失时报错而不是留下原文")
 }
 
 // ---------------------------------------------------------------------------
-// ⬇️ 这一条现在应该是红的：执行器未实现。
+// 执行器
 // ---------------------------------------------------------------------------
 
 TEST_CASE("flow：执行器按拓扑序跑完一张图，产出 output")
@@ -245,7 +245,7 @@ TEST_CASE("flow：执行器按拓扑序跑完一张图，产出 output")
         const auto* config = std::get_if<workflow::OutputConfig>(&node.config);
         if (config == nullptr) { return std::unexpected(workflow::NodeError{false, "配置不匹配"}); }
         (void)context;
-        return workflow::Value{config->value};
+        return workflow::Value(config->value);
     });
 
     workflow::Runner      runner(registry);
@@ -256,5 +256,252 @@ TEST_CASE("flow：执行器按拓扑序跑完一张图，产出 output")
     REQUIRE(run.has_value());
     CHECK(run->ok);
     CHECK(run->traces.size() == 2u);
-    CHECK(run->output == "{{ in.value }}");
+    // 引擎在调用处理器前做插值（改的是副本），所以 Output 拿到的是替换后的值
+    CHECK(run->output == "来自输入");
+
+    // 而原图必须保持原样（图会被复用，第二次运行不能带着上次的值）
+    const auto* outConfig = std::get_if<workflow::OutputConfig>(&graph->find("out")->config);
+    REQUIRE(outConfig != nullptr);
+    CHECK(outConfig->value == "{{ in.value }}");
+}
+
+// ---------------------------------------------------------------------------
+// 执行器：失败 / 缺处理器 / 分支 / 跳过
+// ---------------------------------------------------------------------------
+
+namespace
+{
+
+workflow::NodeRegistry makeRegistry(int& outputCalls)
+{
+    workflow::NodeRegistry registry;
+
+    registry.add(workflow::NodeType::Input,
+                 [](workflow::Node const&, workflow::RunContext const&) {
+                     return std::expected<workflow::Value, workflow::NodeError>{
+                         workflow::Value{ { "value", "来自输入" } }
+                     };
+                 });
+
+    registry.add(workflow::NodeType::Output,
+                 [&outputCalls](workflow::Node const& node, workflow::RunContext const&) {
+                     ++outputCalls;
+                     const auto* config = std::get_if<workflow::OutputConfig>(&node.config);
+                     if (config == nullptr)
+                     {
+                         return std::expected<workflow::Value, workflow::NodeError>{
+                             std::unexpected(workflow::NodeError{ false, "配置不匹配" })
+                         };
+                     }
+                     // 注意用圆括号：nlohmann::json 的花括号会被解释成 initializer_list，
+                     // Value{"x"} 是 ["x"]（数组）而不是 "x"。这个坑值得写在测试里。
+                     return std::expected<workflow::Value, workflow::NodeError>{
+                         workflow::Value(config->value)
+                     };
+                 });
+
+    return registry;
+}
+
+}  // namespace
+
+TEST_CASE("flow：处理器失败时中止，错误里要有节点 id")
+{
+    auto graph = workflow::loadGraph(nlohmann::json::parse(R"({
+        "id": "fail",
+        "nodes": [
+            { "id": "in",  "type": "input",  "fields": [] },
+            { "id": "llm", "type": "llm",    "prompt": "{{ in.value }}" },
+            { "id": "out", "type": "output", "value": "{{ llm.text }}" }
+        ]
+    })"));
+    REQUIRE(graph.has_value());
+
+    int                   outputCalls = 0;
+    workflow::NodeRegistry registry   = makeRegistry(outputCalls);
+
+    registry.add(workflow::NodeType::Llm,
+                 [](workflow::Node const&, workflow::RunContext const&) {
+                     return std::expected<workflow::Value, workflow::NodeError>{
+                         std::unexpected(workflow::NodeError{ true, "模型超时" })
+                     };
+                 });
+
+    workflow::Runner     runner(registry);
+    workflow::RunContext context;
+    workflow::FlowRun    run = runner.run(*graph, context, {}).value();
+
+    CHECK_FALSE(run.ok);
+    CHECK(run.error.find("llm") != std::string::npos);        // 指明哪个节点
+    CHECK(run.error.find("模型超时") != std::string::npos);
+    REQUIRE(run.traces.size() == 2u);                          // in 记一条，llm 记失败
+    CHECK(run.traces[1].result.retryable);                     // retryable 透传
+    CHECK(outputCalls == 0);                                   // 中止了，out 没跑
+}
+
+TEST_CASE("flow：stopOnError=false 时记录错误并继续")
+{
+    auto graph = workflow::loadGraph(nlohmann::json::parse(R"({
+        "id": "tolerant",
+        "nodes": [
+            { "id": "in",  "type": "input",  "fields": [] },
+            { "id": "out", "type": "output", "value": "固定值" }
+        ]
+    })"));
+    REQUIRE(graph.has_value());
+
+    int                   outputCalls = 0;
+    workflow::NodeRegistry registry   = makeRegistry(outputCalls);
+
+    // 让 input 失败
+    workflow::NodeRegistry failing;
+    failing.add(workflow::NodeType::Input,
+                [](workflow::Node const&, workflow::RunContext const&) {
+                    return std::expected<workflow::Value, workflow::NodeError>{
+                        std::unexpected(workflow::NodeError{ false, "输入缺失" })
+                    };
+                });
+    failing.add(workflow::NodeType::Output, [&outputCalls](workflow::Node const&,
+                                                           workflow::RunContext const&) {
+        ++outputCalls;
+        return std::expected<workflow::Value, workflow::NodeError>{
+            workflow::Value("固定值") };
+    });
+
+    workflow::Runner     runner(failing);
+    workflow::RunContext context;
+
+    workflow::RunOptions options;
+    options.stopOnError = false;
+
+    workflow::FlowRun run = runner.run(*graph, context, options).value();
+
+    CHECK(run.ok);               // 没有致命错误
+    CHECK(outputCalls == 1);     // 后面的节点照跑
+    REQUIRE(run.traces.size() == 2u);
+    CHECK_FALSE(run.traces[0].result.ok);
+    CHECK(run.traces[1].result.ok);
+    (void)registry;
+}
+
+TEST_CASE("flow：没注册处理器要明确报错，而不是跳过")
+{
+    auto graph = workflow::loadGraph(nlohmann::json::parse(R"({
+        "id": "missing",
+        "nodes": [ { "id": "in", "type": "input", "fields": [] } ]
+    })"));
+    REQUIRE(graph.has_value());
+
+    workflow::NodeRegistry empty;   // 一个都没注册
+    workflow::Runner       runner(empty);
+    workflow::RunContext   context;
+
+    workflow::FlowRun run = runner.run(*graph, context, {}).value();
+
+    CHECK_FALSE(run.ok);
+    CHECK(run.error.find("没有注册处理器") != std::string::npos);
+}
+
+TEST_CASE("flow：If 走 then 分支，else 分支被标 skipped 且不执行")
+{
+    auto graph = workflow::loadGraph(nlohmann::json::parse(R"({
+        "id": "branch",
+        "nodes": [
+            { "id": "in",   "type": "input",  "fields": [] },
+            { "id": "gate", "type": "if",     "when": "{{ in.value }}", "thenTo": "yes", "elseTo": "no" },
+            { "id": "yes",  "type": "output", "value": "走了 then" },
+            { "id": "no",   "type": "output", "value": "走了 else" }
+        ]
+    })"));
+    REQUIRE(graph.has_value());
+
+    int                   outputCalls = 0;
+    workflow::NodeRegistry registry   = makeRegistry(outputCalls);
+
+    registry.add(workflow::NodeType::If,
+                 [](workflow::Node const& node, workflow::RunContext const&) {
+                     (void)node;
+                     return std::expected<workflow::Value, workflow::NodeError>{
+                         workflow::Value{ { "branch", "then" } }
+                     };
+                 });
+
+    workflow::Runner     runner(registry);
+    workflow::RunContext context;
+
+    workflow::FlowRun run = runner.run(*graph, context, {}).value();
+
+    CHECK(run.ok);
+    CHECK(run.output == "走了 then");
+    CHECK(outputCalls == 1);   // 只执行了一个 Output
+
+    bool elseSkipped = false;
+    for (const auto& trace : run.traces)
+    {
+        if (trace.id == "no") { elseSkipped = trace.result.skipped; }
+    }
+    CHECK(elseSkipped);
+}
+
+TEST_CASE("flow：If 返回 else 时反过来")
+{
+    auto graph = workflow::loadGraph(nlohmann::json::parse(R"({
+        "id": "branch2",
+        "nodes": [
+            { "id": "in",   "type": "input",  "fields": [] },
+            { "id": "gate", "type": "if",     "when": "x", "thenTo": "yes", "elseTo": "no" },
+            { "id": "yes",  "type": "output", "value": "走了 then" },
+            { "id": "no",   "type": "output", "value": "走了 else" }
+        ]
+    })"));
+    REQUIRE(graph.has_value());
+
+    int                   outputCalls = 0;
+    workflow::NodeRegistry registry   = makeRegistry(outputCalls);
+
+    registry.add(workflow::NodeType::If,
+                 [](workflow::Node const&, workflow::RunContext const&) {
+                     return std::expected<workflow::Value, workflow::NodeError>{
+                         workflow::Value{ { "branch", "else" } }
+                     };
+                 });
+
+    workflow::Runner     runner(registry);
+    workflow::RunContext context;
+
+    workflow::FlowRun run = runner.run(*graph, context, {}).value();
+
+    CHECK(run.ok);
+    CHECK(run.output == "走了 else");
+
+    bool yesSkipped = false;
+    for (const auto& trace : run.traces)
+    {
+        if (trace.id == "yes") { yesSkipped = trace.result.skipped; }
+    }
+    CHECK(yesSkipped);
+}
+
+TEST_CASE("flow：同一个图跑两次结果一样（插值不污染原图）")
+{
+    auto graph = workflow::loadGraph(nlohmann::json::parse(R"({
+        "id": "reuse",
+        "nodes": [
+            { "id": "in",  "type": "input",  "fields": [] },
+            { "id": "out", "type": "output", "value": "{{ in.value }}" }
+        ]
+    })"));
+    REQUIRE(graph.has_value());
+
+    int                   outputCalls = 0;
+    workflow::NodeRegistry registry   = makeRegistry(outputCalls);
+    workflow::Runner       runner(registry);
+
+    for (int i = 0; i < 2; ++i)
+    {
+        workflow::RunContext context;
+        workflow::FlowRun    run = runner.run(*graph, context, {}).value();
+        CHECK(run.ok);
+        CHECK(run.output == "来自输入");
+    }
 }

@@ -8,10 +8,16 @@
 | 目录 | 是什么 | 状态 |
 |---|---|---|
 | `flow/` | 草稿调度队列（取任务 / 重试 / 放弃 / 预算 / 陈旧丢弃） | 桩：`drain` 返回空、`runOne` 未实现 |
-| `workflow/` | 编排引擎（Graph / Node / NodeRegistry / RunContext / Runner） | 数据模型与图算法已完成；`Runner::run` 是桩 |
+| `workflow/` | 编排引擎（Graph / Node / NodeRegistry / RunContext / Runner） | **执行器已实现，11 条用例全绿**（加载/校验/拓扑/插值/执行/分支/失败策略） |
 
-两者各自带着原来的测试（`test_draft_queue.cpp` / `test_workflow.cpp`），
-用例是有意留红的 —— 它们是"还没做"的标记，不是 bug。
+两者各自带着原来的测试（`test_draft_queue.cpp` / `test_workflow.cpp`）。
+默认不编译；要看它们是否还活着：
+
+```powershell
+cmake -S . -B build -DNOTE_BUILD_LABS=ON
+cmake --build build --target workflow_tests --config Debug
+build\bin\Debug\workflow_tests.exe
+```
 
 ## 为什么移到这里（决策记录）
 

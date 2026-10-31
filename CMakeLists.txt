@@ -298,3 +298,30 @@ endif()
 # ---------------------------------------------------------------------------
 enable_testing()
 add_subdirectory(tests)
+
+# ---------------------------------------------------------------------------
+# labs —— 备用实验代码（默认**不构建**）
+#
+# 这些代码当前没有用户，默认不进主线。要跑它们的测试：
+#   cmake -DNOTE_BUILD_LABS=ON -B <build>
+#
+# 为什么保留这个开关而不是删掉：把"还活着的设计"和"已废弃的代码"分开管理 ——
+# 编译得起来、测得起来，但不会让人误以为它已经是产品的一部分。
+# ---------------------------------------------------------------------------
+option(NOTE_BUILD_LABS "构建 labs/ 下的实验代码（workflow 引擎等）与其测试" OFF)
+
+if(NOTE_BUILD_LABS)
+    add_library(workflow
+        labs/workflow/src/engine.cpp
+        labs/workflow/src/graph.cpp
+        labs/workflow/src/node.cpp
+        labs/workflow/src/node_registry.cpp
+        labs/workflow/src/run_context.cpp)
+    target_include_directories(workflow PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/labs/workflow/include)
+    target_link_libraries(workflow PUBLIC third_party)
+
+    add_executable(workflow_tests
+        labs/workflow/test_workflow.cpp
+        tests/main.cpp)
+    target_link_libraries(workflow_tests PRIVATE workflow third_party)
+endif()
