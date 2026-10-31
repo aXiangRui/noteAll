@@ -155,32 +155,67 @@ Summary Book::summary(std::chrono::year_month month) const
         else { result.expenseCents += t.amountCents; }
     }
 
-    // 按分类汇总（支出），金额降序
-    for (const auto& t : visible_)
-    {
-        if (t.direction != Direction::Expense) { continue; }
+    // 按分类汇总（支出 + 收入各一份），金额降序
+    const auto aggregate = [&](Direction direction, std::vector<CategorySum>& out) {
+        for (const auto& t : visible_)
+        {
+            if (t.direction != direction) { continue; }
 
+            const std::chrono::zoned_time      zt{ tz, t.occurred };
+            const std::chrono::year_month_day  ymd{
+                std::chrono::floor<std::chrono::days>(zt.get_local_time()) };
+            const std::chrono::year_month      ym{ ymd.year(), ymd.month() };
+            if (ym != month) { continue; }
+
+            auto it = std::find_if(out.begin(), out.end(),
+                                   [&](CategorySum const& s) { return s.category == t.category; });
+            if (it == out.end()) { out.push_back(CategorySum{ t.category, t.amountCents }); }
+            else { it->cents += t.amountCents; }
+        }
+
+        std::sort(out.begin(), out.end(),
+                  [](CategorySum const& a, CategorySum const& b) { return a.cents > b.cents; });
+    };
+
+    aggregate(Direction::Expense, result.byCategory);
+    aggregate(Direction::Income, result.incomeByCategory);
+    return result;
+}
+
+std::vector<MonthTotal> monthlyTotals(std::vector<Transaction> const& visible,
+                                      std::chrono::year_month          lastMonth,
+                                      int                              count)
+{
+    std::vector<MonthTotal> totals;
+    if (count <= 0) { return totals; }
+
+    const auto* tz = std::chrono::current_zone();
+
+    totals.reserve(static_cast<std::size_t>(count));
+    for (int i = count - 1; i >= 0; --i)
+    {
+        MonthTotal total;
+        total.month = lastMonth - std::chrono::months{ i };
+        totals.push_back(total);
+    }
+
+    // 一次遍历把每一笔归到对应月份（避免 rows × months 次重扫）
+    for (const auto& t : visible)
+    {
         const std::chrono::zoned_time      zt{ tz, t.occurred };
         const std::chrono::year_month_day  ymd{
             std::chrono::floor<std::chrono::days>(zt.get_local_time()) };
         const std::chrono::year_month      ym{ ymd.year(), ymd.month() };
-        if (ym != month) { continue; }
 
-        auto it = std::find_if(result.byCategory.begin(), result.byCategory.end(),
-                               [&](CategorySum const& s) { return s.category == t.category; });
-        if (it == result.byCategory.end())
-        {
-            result.byCategory.push_back(CategorySum{ t.category, t.amountCents });
-        }
-        else
-        {
-            it->cents += t.amountCents;
-        }
+        auto it = std::find_if(totals.begin(), totals.end(),
+                               [&](MonthTotal const& m) { return m.month == ym; });
+        if (it == totals.end()) { continue; }
+
+        if (t.direction == Direction::Income) { it->incomeCents += t.amountCents; }
+        else { it->expenseCents += t.amountCents; }
     }
 
-    std::sort(result.byCategory.begin(), result.byCategory.end(),
-              [](CategorySum const& a, CategorySum const& b) { return a.cents > b.cents; });
-    return result;
+    return totals;
 }
 
 }  // namespace ledger

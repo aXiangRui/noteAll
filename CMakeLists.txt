@@ -250,6 +250,7 @@ if(EXISTS "${EUI_NEO_DIR}/CMakeLists.txt")
         app.cpp
         ui/state.cpp
         ui/week_page.cpp
+        ui/charts_page.cpp
         ui/ledger_page.cpp
         ui/settings_page.cpp
         ui/detail_panel.cpp

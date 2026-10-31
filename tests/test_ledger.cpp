@@ -184,3 +184,57 @@ TEST_CASE("Book::summary：按本地月份汇总支出/收入/分类")
     CHECK(october.byCategory[0].cents == 3200);
     CHECK(october.byCategory[1].category == "交通");
 }
+
+TEST_CASE("Book::summary：收入也按分类汇总（图表要用）")
+{
+    const auto file = scratchFile("income-cats.jsonl");
+
+    ledger::Book book{ file };
+    REQUIRE(book.load().has_value());
+
+    REQUIRE(book.add(500000, ledger::Direction::Income, utcAt(30, 2), "工资", "工资", utcAt(30, 2)).has_value());
+    REQUIRE(book.add(20000, ledger::Direction::Income, utcAt(30, 3), "报销", "报销", utcAt(30, 3)).has_value());
+    REQUIRE(book.add(3200, ledger::Direction::Expense, utcAt(30, 4), "餐饮", "午饭", utcAt(30, 4)).has_value());
+
+    const auto summary = book.summary(year{ 2026 } / 10);
+
+    REQUIRE(summary.incomeByCategory.size() == 2);
+    CHECK(summary.incomeByCategory[0].category == "工资");      // 金额大的在前
+    CHECK(summary.incomeByCategory[0].cents == 500000);
+    CHECK(summary.incomeByCategory[1].category == "报销");
+
+    // 支出分类不受影响
+    REQUIRE(summary.byCategory.size() == 1);
+    CHECK(summary.byCategory[0].category == "餐饮");
+}
+
+TEST_CASE("monthlyTotals：近 6 个月按月分桶，最老在前")
+{
+    const auto file = scratchFile("monthly.jsonl");
+
+    ledger::Book book{ file };
+    REQUIRE(book.load().has_value());
+
+    // 上海 8 月 / 9 月 / 10 月各一笔（UTC 用当天 04:00 = 上海 12:00）
+    const auto august    = sys_days{ year{ 2026 } / 8 / 15 } + hours{ 4 };
+    const auto september = sys_days{ year{ 2026 } / 9 / 10 } + hours{ 4 };
+
+    REQUIRE(book.add(1000, ledger::Direction::Expense, august,    "餐饮", "8月", august).has_value());
+    REQUIRE(book.add(2000, ledger::Direction::Expense, september, "餐饮", "9月", september).has_value());
+    REQUIRE(book.add(3000, ledger::Direction::Expense, utcAt(30, 4), "餐饮", "10月", utcAt(30, 4)).has_value());
+    REQUIRE(book.add(9000, ledger::Direction::Income,  utcAt(30, 5), "工资", "10月收入", utcAt(30, 5)).has_value());
+
+    const auto months = ledger::monthlyTotals(book.list(), year{ 2026 } / 10, 6);
+    REQUIRE(months.size() == 6);
+
+    CHECK(months.front().month == year{ 2026 } / 5);    // 5、6、7、8、9、10
+    CHECK(months.back().month == year{ 2026 } / 10);
+
+    CHECK(months[3].expenseCents == 1000);              // 8 月
+    CHECK(months[4].expenseCents == 2000);              // 9 月
+    CHECK(months[5].expenseCents == 3000);              // 10 月
+    CHECK(months[5].incomeCents == 9000);
+
+    // 没记账的月份是 0，不是漏掉
+    CHECK(months[0].expenseCents == 0);
+}

@@ -23,6 +23,7 @@ enum class Page
 {
     Week,        // 周视图（当前默认）
     Ledger,      // 账本（记账流水）
+    Charts,      // 图表（收支构成 / 趋势）
     Settings,    // 设置
 };
 

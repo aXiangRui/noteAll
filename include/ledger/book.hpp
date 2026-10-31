@@ -24,9 +24,27 @@ struct Summary
 {
     std::int64_t              expenseCents = 0;
     std::int64_t              incomeCents  = 0;
-    std::vector<CategorySum>  byCategory;   // 支出，按金额从大到小
+    std::vector<CategorySum>  byCategory;        // 支出分类，金额降序
+    std::vector<CategorySum>  incomeByCategory;  // 收入分类，金额降序
     std::size_t               count = 0;
 };
+
+/** 某个月的合计（给趋势图用）。 */
+struct MonthTotal
+{
+    std::chrono::year_month month{};
+    std::int64_t            expenseCents = 0;
+    std::int64_t            incomeCents  = 0;
+};
+
+/**
+ * 最近 count 个月的合计（含 lastMonth 往前数）。
+ *
+ * 按月聚合必须走**本地时区** —— 和 summary 一致，否则跨时区会差一个月。
+ */
+std::vector<MonthTotal> monthlyTotals(std::vector<Transaction> const& visible,
+                                      std::chrono::year_month          lastMonth,
+                                      int                              count);
 
 class Book
 {
