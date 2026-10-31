@@ -251,4 +251,75 @@ std::vector<DayTotal> dayTotals(std::vector<Transaction> const& visible,
 
     return totals;
 }
+std::expected<Book::RecategorizeResult, std::string> Book::recategorizeOthers(bool commit)
+{
+    RecategorizeResult result;
+
+    auto lock = core::FileLock::acquire(file_);
+    if (!lock)
+    {
+        core::appendLog(file_, core::LogLevel::Error, lock.error());
+        return std::unexpected(lock.error());
+    }
+
+    if (auto reloaded = ledger::load(file_); !reloaded)
+    {
+        return std::unexpected(reloaded.error());
+    }
+
+    const auto before = all_;
+
+    for (auto& t : all_)
+    {
+        if (t.deleted_at || t.category != "其他") { continue; }
+        ++result.scanned;
+
+        // 微信转账：商品列为 "/"，导入时备注就成了 "🌊 /"
+        bool isTransfer = false;
+        if (t.note.size() >= 2)
+        {
+            const std::string tail = t.note.substr(t.note.size() - 2);
+            if (tail == " /" || tail == " ／")
+            {
+                t.note.erase(t.note.size() - 2);
+                t.note = t.note.substr(0, t.note.find_last_not_of(" \t") + 1);
+                isTransfer = true;
+            }
+        }
+
+        const std::string guess = isTransfer ? "转账" : guessCategory(t.note, t.direction);
+        if (guess == "其他" || guess.empty())
+        {
+            ++result.remaining;
+            continue;
+        }
+
+        t.category = guess;
+        ++result.changed;
+
+        auto movedIt = std::find_if(result.moved.begin(), result.moved.end(),
+                                    [&](auto const& item) { return item.first == guess; });
+        if (movedIt == result.moved.end()) { result.moved.emplace_back(guess, 1); }
+        else { ++movedIt->second; }
+    }
+
+    std::sort(result.moved.begin(), result.moved.end(),
+              [](auto const& a, auto const& b) { return a.second > b.second; });
+
+    if (!commit)
+    {
+        all_ = before;   // 预览：内存也不留痕迹
+        return result;
+    }
+
+    if (auto saved = save(file_, all_); !saved)
+    {
+        all_ = before;
+        core::appendLog(file_, core::LogLevel::Error, saved.error());
+        return std::unexpected(saved.error());
+    }
+
+    reindex(all_, visible_);
+    return result;
+}
 }  // namespace ledger

@@ -14,6 +14,7 @@
 #include "app/corpus.hpp"
 #include "app/time_input.hpp"
 #include <cstdio>
+#include <map>
 #include "ledger/money.hpp"
 #include "import/bill.hpp"
 #include "import/charset.hpp"
@@ -814,6 +815,63 @@ int execute(const std::vector<std::string>& args,
                       << '\n';
 
             for (const auto& note : outcome->notes) { std::cout << "  · " << note << '\n'; }
+            return 0;
+        }
+
+        if (sub == "recategorize")
+        {
+            bool commit = false;
+            for (std::size_t i = 3; i < args.size(); ++i)
+            {
+                if (args[i] == "--commit") { commit = true; }
+            }
+
+            const auto* tz = std::chrono::current_zone();
+
+            const auto distribution = [&](char const* title) {
+                std::map<std::string, std::pair<std::size_t, std::int64_t>> buckets;
+                for (const auto& t : book.list())
+                {
+                    if (t.direction != ledger::Direction::Expense) { continue; }
+                    auto& bucket = buckets[t.category];
+                    bucket.first += 1;
+                    bucket.second += t.amountCents;
+                }
+
+                std::vector<std::pair<std::string, std::pair<std::size_t, std::int64_t>>> sorted(
+                    buckets.begin(), buckets.end());
+                std::sort(sorted.begin(), sorted.end(),
+                          [](auto const& a, auto const& b) { return a.second.second > b.second.second; });
+
+                std::cout << title << '\n';
+                for (const auto& [category, info] : sorted)
+                {
+                    std::cout << "  " << category << "  " << ledger::formatCents(info.second) << "  ("
+                              << info.first << " 笔)\n";
+                }
+                (void)tz;
+            };
+
+            distribution("— 重排之前（支出）—");
+
+            const auto result = book.recategorizeOthers(commit);
+            if (!result) { return fail(result.error()); }
+
+            std::cout << "\n扫描「其他」 " << result->scanned << " 笔，归入具体分类 "
+                      << result->changed << " 笔，仍归不出 " << result->remaining << " 笔"
+                      << (commit ? "（已写入）" : "（预览：加 --commit 才写入）") << '\n';
+
+            for (const auto& [category, count] : result->moved)
+            {
+                std::cout << "  → " << category << "  " << count << " 笔\n";
+            }
+
+            if (commit)
+            {
+                ledger::Book after{ ledgerFile };
+                if (auto loaded = after.load(); loaded) { book = std::move(after); }
+                distribution("\n— 重排之后（支出）—");
+            }
             return 0;
         }
 

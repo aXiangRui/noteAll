@@ -88,6 +88,26 @@ public:
     /** 某个月的汇总（按**本地**月份过滤）。 */
     Summary summary(std::chrono::year_month month) const;
 
+    /**
+     * 把分类为「其他」的记录重新猜一遍（补关键词之后用来刷历史数据）。
+     *
+     * 只动「其他」——已经分好类的绝不覆盖（可能是用户手动改过的）。
+     * 备注以 " /" 结尾的是微信转账（商品列填了 "/"），顺便把尾巴去掉并归到「转账」。
+     *
+     * @param commit false = 只统计不落盘
+     */
+    struct RecategorizeResult
+    {
+        std::size_t scanned   = 0;   // 扫到的「其他」条数
+        std::size_t changed   = 0;   // 成功归类
+        std::size_t remaining = 0;   // 仍然归不出来的
+
+        // 归入明细：category → 条数（预览时也能看清"会变成什么样"）
+        std::vector<std::pair<std::string, std::size_t>> moved;
+    };
+
+    std::expected<RecategorizeResult, std::string> recategorizeOthers(bool commit);
+
 private:
     std::filesystem::path          file_;
     std::vector<Transaction>       all_;

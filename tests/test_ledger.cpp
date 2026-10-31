@@ -1,5 +1,6 @@
 #include <doctest/doctest.h>
 
+#include <algorithm>
 #include <chrono>
 #include <cstdint>
 #include <string>
@@ -276,4 +277,87 @@ TEST_CASE("dayTotals：2 月天数按闰年算")
 
     CHECK(ledger::dayTotals(empty.list(), year{ 2026 } / 2).size() == 28);   // 平年
     CHECK(ledger::dayTotals(empty.list(), year{ 2028 } / 2).size() == 29);   // 闰年
+}
+
+TEST_CASE("guessCategory：真实账单里的商户名（2026-10-31 扩充）")
+{
+    using D = ledger::Direction;
+
+    // 连锁快餐 / 茶饮
+    CHECK(ledger::guessCategory("麦当劳", D::Expense) == "餐饮");
+    CHECK(ledger::guessCategory("肯德基", D::Expense) == "餐饮");
+    CHECK(ledger::guessCategory("luckin coffee 订单付款", D::Expense) == "餐饮");
+    CHECK(ledger::guessCategory("美宜佳便利店1店 订单支付", D::Expense) == "购物");
+    CHECK(ledger::guessCategory("零食很忙 长沙市岳麓区邹莉食品店", D::Expense) == "餐饮");
+    CHECK(ledger::guessCategory("叔叔家咖喱 叔叔家咖喱长沙后湖小区店", D::Expense) == "餐饮");
+
+    // 交通：共享单车
+    CHECK(ledger::guessCategory("哈啰骑行 哈啰单车骑行", D::Expense) == "交通");
+
+    // 大小写不敏感（品牌名写法不统一）
+    CHECK(ledger::guessCategory("miHoYo Games 珍珠纪行", D::Expense) == "娱乐");
+    CHECK(ledger::guessCategory("MIHOYO", D::Expense) == "娱乐");
+
+    // 校园 / 水电
+    CHECK(ledger::guessCategory("中南大学 一卡通充值", D::Expense) == "教育");
+    CHECK(ledger::guessCategory("中国电信 为193****4148充值50.0元", D::Expense) == "居家");
+
+    // 归类不了的仍然是「其他」，不要瞎猜
+    CHECK(ledger::guessCategory("杭州深度求索 DeepSeek-API服务", D::Expense) == "其他");
+}
+
+TEST_CASE("expenseCategories：包含「转账」这一独立分类")
+{
+    const auto categories = ledger::expenseCategories();
+    CHECK(std::find(categories.begin(), categories.end(), "转账") != categories.end());
+}
+
+TEST_CASE("recategorizeOthers：只动「其他」，不动已分类的")
+{
+    const auto file = scratchFile("recat.jsonl");
+
+    ledger::Book book{ file };
+    REQUIRE(book.load().has_value());
+
+    // 三条「其他」：转账（备注以 " /" 结尾）、麦当劳、认不出来的
+    REQUIRE(book.add(1000, ledger::Direction::Expense, utcAt(30, 4), "其他", "🌊 /", utcAt(30, 4)).has_value());
+    REQUIRE(book.add(3200, ledger::Direction::Expense, utcAt(30, 5), "其他", "麦当劳", utcAt(30, 5)).has_value());
+    REQUIRE(book.add(500, ledger::Direction::Expense, utcAt(30, 6), "其他", "天知道这是什么", utcAt(30, 6)).has_value());
+
+    // 一条已经分好类的（不该被覆盖）
+    REQUIRE(book.add(9900, ledger::Direction::Expense, utcAt(30, 7), "聚餐", "麦当劳", utcAt(30, 7)).has_value());
+
+    // 预览：不写盘
+    const auto preview = book.recategorizeOthers(false);
+    REQUIRE(preview.has_value());
+    CHECK(preview->scanned == 3);
+    CHECK(preview->changed == 2);
+    CHECK(preview->remaining == 1);
+    CHECK(book.list().size() == 4);
+
+    // 真写
+    const auto applied = book.recategorizeOthers(true);
+    REQUIRE(applied.has_value());
+    CHECK(applied->changed == 2);
+
+    ledger::Book reopened{ file };
+    REQUIRE(reopened.load().has_value());
+
+    int transfer = 0, food = 0, other = 0, untouched = 0;
+    for (const auto& t : reopened.list())
+    {
+        if (t.note == "🌊")
+        {
+            CHECK(t.category == "转账");   // 尾巴 " /" 也去掉了
+            ++transfer;
+        }
+        else if (t.category == "餐饮") { ++food; }
+        else if (t.category == "其他") { ++other; }
+        if (t.category == "聚餐") { ++untouched; }
+    }
+
+    CHECK(transfer == 1);
+    CHECK(food == 1);
+    CHECK(other == 1);
+    CHECK(untouched == 1);   // 手动分类的不被覆盖
 }

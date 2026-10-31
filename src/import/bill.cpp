@@ -290,7 +290,12 @@ BillParseResult parseBill(std::string_view utf8Csv)
 
         // 备注：交易对方 + 商品
         const std::string counterparty = cell(row, map.counterparty);
-        const std::string goods        = cell(row, map.goods);
+        std::string       goods        = cell(row, map.goods);
+
+        // 微信账单里「商品」列是 "/" 表示不是消费（转账/红包）—— 不能当商品名拼进备注，
+        // 否则备注变成 "🌊 /"，关键词表永远匹配不上。
+        const bool isTransfer = (goods == "/" || goods == "／");
+        if (isTransfer) { goods.clear(); }
 
         std::string note = counterparty;
         if (!goods.empty() && goods != counterparty)
@@ -303,7 +308,7 @@ BillParseResult parseBill(std::string_view utf8Csv)
         billRow.occurred    = *occurred;
         billRow.amountCents = *cents;
         billRow.direction   = direction;
-        billRow.category    = ledger::guessCategory(note, direction);
+        billRow.category    = isTransfer ? "转账" : ledger::guessCategory(note, direction);
         billRow.note        = note;
         billRow.externalId  = cell(row, map.externalId);
         billRow.lineNumber  = lineNumber;
