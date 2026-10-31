@@ -498,6 +498,7 @@ void composeLedgerPage(eui::Ui& ui, AppState& state, const PageRect& area)
 
     composeChip(ui, "ledger.prev", area.x + 168.0f, y0, 96.0f, "‹ 上一月", [&state] {
         state.ledgerMonth -= std::chrono::months{ 1 };
+        state.ledgerScroll = 0.0f;   // 换月后回到顶部
     });
 
     composeChip(ui, "ledger.now", area.x + 272.0f, y0, 80.0f, "本月", [&state] {
@@ -505,10 +506,12 @@ void composeLedgerPage(eui::Ui& ui, AppState& state, const PageRect& area)
         const std::chrono::year_month_day today{
             std::chrono::floor<std::chrono::days>(zt.get_local_time()) };
         state.ledgerMonth = std::chrono::year_month{ today.year(), today.month() };
+        state.ledgerScroll = 0.0f;
     });
 
     composeChip(ui, "ledger.next", area.x + 360.0f, y0, 96.0f, "下一月 ›", [&state] {
         state.ledgerMonth += std::chrono::months{ 1 };
+        state.ledgerScroll = 0.0f;
     });
 
     char monthBuffer[16];
@@ -600,53 +603,91 @@ void composeLedgerPage(eui::Ui& ui, AppState& state, const PageRect& area)
         .position(area.x + padX + colDate + colMoney + colCat, listTop + 8.0f).size(colNote, kLineCaption)
         .text("备注").fontSize(kFontCaption).color(colors::kMuted).build();
 
-    const float rowsTop   = listTop + kHeaderRowHeight + 4.0f;
-    const float rowsMaxY  = listTop + listHeight - 6.0f;
-    const auto* tz        = std::chrono::current_zone();
+    const float rowsTop    = listTop + kHeaderRowHeight + 4.0f;
+    const float rowsHeight = std::max(40.0f, listTop + listHeight - rowsTop - 6.0f);
+    const auto* tz         = std::chrono::current_zone();
 
-    float rowY = rowsTop;
-    std::size_t shown = 0;
-    for (const auto* t : rows)
+    // ---- 可滚动列表 ----
+    // 为什么不用 components::scrollView：它内部是 column 流式布局（wrapContent），
+    // 而我们的 UI 全部绝对定位，混用会被列布局覆盖 y。
+    // 这里直接给 stack 挂 scrollState：滚轮/触摸由运行时处理，偏移量交回我们的 state，
+    // 子元素坐标 = 原始 y - 偏移量。clamp 自己做，避免越界空白。
+    const float contentHeight = static_cast<float>(rows.size()) * kRowHeight;
+    const float maxOffset     = std::max(0.0f, contentHeight - rowsHeight);
+
+    state.ledgerScroll = std::clamp(state.ledgerScroll, 0.0f, maxOffset);
+
+    ui.stack("ledger.rows")
+        .position(area.x, rowsTop)
+        .size(area.width, rowsHeight)
+        .clip()
+        .scrollState("ledger.rows", state.ledgerScroll, maxOffset, kRowHeight * 1.5f)
+        .onScrollOffsetChanged([&state](float value) {
+            state.ledgerScroll = value;
+            repaint();
+        })
+        .content([&] {
+            float rowY = -state.ledgerScroll;
+            std::size_t index = 0;
+
+            for (const auto* t : rows)
+            {
+                const std::string rowId = "ledger.row." + t->id;
+
+                // 隔行底色，长列表更容易读
+                if (index % 2 == 1)
+                {
+                    ui.rect(rowId + ".bg")
+                        .position(6.0f, rowY).size(area.width - 12.0f, kRowHeight)
+                        .radius(6.0f).color(colors::kPageBg).build();
+                }
+
+                // 日期时间：只显示 "10-30 23:00"（年份对月度视图是噪音）
+                const std::string localText = app::formatLocalDateTime(t->occurred, *tz);
+                const std::string shortTime =
+                    localText.size() > 5 ? localText.substr(5) : localText;
+
+                const bool isIncome = t->direction == ledger::Direction::Income;
+
+                ui.text(rowId + ".date")
+                    .position(padX, rowY + 6.0f).size(colDate, kLineCaption)
+                    .text(shortTime).fontSize(kFontCaption).color(colors::kMuted).build();
+
+                ui.text(rowId + ".money")
+                    .position(padX + colDate, rowY + 6.0f).size(colMoney, kLineCaption)
+                    .text(moneyText(t->amountCents, isIncome)).fontSize(kFontBody)
+                    .color(isIncome ? colors::kKindNote : colors::kKindTodo).build();
+
+                ui.text(rowId + ".cat")
+                    .position(padX + colDate + colMoney, rowY + 6.0f).size(colCat, kLineCaption)
+                    .text(t->category).fontSize(kFontCaption).color(colors::kText).build();
+
+                // 备注按列宽截断，保证不越界
+                ui.text(rowId + ".note")
+                    .position(padX + colDate + colMoney + colCat, rowY + 6.0f)
+                    .size(colNote, kLineCaption)
+                    .text(app::elideToFit(t->note, colNote, kFontCaption, 1))
+                    .fontSize(kFontCaption).color(colors::kText).build();
+
+                rowY += kRowHeight;
+                ++index;
+            }
+        })
+        .build();
+
+    // 滚动条（只在内容超出时画）：位置按 offset / maxOffset 比例
+    if (maxOffset > 0.5f)
     {
-        if (rowY + kRowHeight > rowsMaxY) { break; }
+        const float trackX     = area.x + area.width - 10.0f;
+        const float trackY     = rowsTop + 4.0f;
+        const float trackH     = rowsHeight - 8.0f;
+        const float thumbH     = std::max(28.0f, trackH * (rowsHeight / contentHeight));
+        const float thumbTravel = trackH - thumbH;
+        const float thumbY     = trackY + thumbTravel * (state.ledgerScroll / maxOffset);
 
-        const std::string rowId = "ledger.row." + t->id;
-
-        // 隔行底色，长列表更容易读
-        if (shown % 2 == 1)
-        {
-            ui.rect(rowId + ".bg")
-                .position(area.x + 6.0f, rowY).size(area.width - 12.0f, kRowHeight)
-                .radius(6.0f).color(colors::kPageBg).build();
-        }
-
-        // 日期时间：只显示 "10-30 23:00"（年份对月度视图是噪音）
-        const std::string localText = app::formatLocalDateTime(t->occurred, *tz);
-        const std::string shortTime = localText.size() > 5 ? localText.substr(5) : localText;
-
-        const bool isIncome = t->direction == ledger::Direction::Income;
-
-        ui.text(rowId + ".date")
-            .position(area.x + padX, rowY + 6.0f).size(colDate, kLineCaption)
-            .text(shortTime).fontSize(kFontCaption).color(colors::kMuted).build();
-
-        ui.text(rowId + ".money")
-            .position(area.x + padX + colDate, rowY + 6.0f).size(colMoney, kLineCaption)
-            .text(moneyText(t->amountCents, isIncome)).fontSize(kFontBody)
-            .color(isIncome ? colors::kKindNote : colors::kKindTodo).build();
-
-        ui.text(rowId + ".cat")
-            .position(area.x + padX + colDate + colMoney, rowY + 6.0f).size(colCat, kLineCaption)
-            .text(t->category).fontSize(kFontCaption).color(colors::kText).build();
-
-        // 备注按列宽截断，保证不越界
-        ui.text(rowId + ".note")
-            .position(area.x + padX + colDate + colMoney + colCat, rowY + 6.0f).size(colNote, kLineCaption)
-            .text(app::elideToFit(t->note, colNote, kFontCaption, 1))
-            .fontSize(kFontCaption).color(colors::kText).build();
-
-        rowY += kRowHeight;
-        ++shown;
+        ui.rect("ledger.scrollbar.thumb")
+            .position(trackX, thumbY).size(4.0f, thumbH).radius(2.0f)
+            .color(colors::kAccent).build();
     }
 
     if (rows.empty())
@@ -654,14 +695,6 @@ void composeLedgerPage(eui::Ui& ui, AppState& state, const PageRect& area)
         ui.text("ledger.empty")
             .position(area.x + padX, rowsTop + 8.0f).size(area.width - padX * 2.0f, kLineCaption)
             .text("这个月还没记账（命令行：note ledger add \"午饭 32\"）")
-            .fontSize(kFontCaption).color(colors::kMuted).build();
-    }
-    else if (shown < rows.size())
-    {
-        ui.text("ledger.more")
-            .position(area.x + padX, rowsMaxY - kLineCaption)
-            .size(area.width - padX * 2.0f, kLineCaption)
-            .text("…还有 " + std::to_string(rows.size() - shown) + " 笔没显示（窗口再大点）")
             .fontSize(kFontCaption).color(colors::kMuted).build();
     }
 

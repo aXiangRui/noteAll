@@ -62,6 +62,7 @@ struct AppState
     std::vector<ledger::Transaction> ledgerEntries;   // 可见流水（不含软删除）
     std::chrono::year_month          ledgerMonth{};   // 当前看的月份
     LedgerView                       ledgerView = LedgerView::List;
+    float                            ledgerScroll = 0.0f;   // 列表滚动偏移（像素）
     std::string                      ledgerError;
     bool                             ledgerLoaded = false;
 
