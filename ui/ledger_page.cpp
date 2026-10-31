@@ -499,6 +499,7 @@ void composeLedgerPage(eui::Ui& ui, AppState& state, const PageRect& area)
     composeChip(ui, "ledger.prev", area.x + 168.0f, y0, 96.0f, "‹ 上一月", [&state] {
         state.ledgerMonth -= std::chrono::months{ 1 };
         state.ledgerScroll = 0.0f;   // 换月后回到顶部
+        state.chartsDay    = 0;      // 选中的日也要清（否则会显示上个月的某天）
     });
 
     composeChip(ui, "ledger.now", area.x + 272.0f, y0, 80.0f, "本月", [&state] {
@@ -507,11 +508,13 @@ void composeLedgerPage(eui::Ui& ui, AppState& state, const PageRect& area)
             std::chrono::floor<std::chrono::days>(zt.get_local_time()) };
         state.ledgerMonth = std::chrono::year_month{ today.year(), today.month() };
         state.ledgerScroll = 0.0f;
+        state.chartsDay    = 0;
     });
 
     composeChip(ui, "ledger.next", area.x + 360.0f, y0, 96.0f, "下一月 ›", [&state] {
         state.ledgerMonth += std::chrono::months{ 1 };
         state.ledgerScroll = 0.0f;
+        state.chartsDay    = 0;
     });
 
     char monthBuffer[16];

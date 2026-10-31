@@ -161,6 +161,92 @@ void composePieWithLegend(eui::Ui& ui, const std::string& id, float x, float y,
         .color(colors::kMuted).build();
 }
 
+/** 每日柱状图：每天一根，可点选。 */
+void composeDailyBars(eui::Ui& ui, AppState& state, const std::string& id, float x, float y,
+                      float width, float height, const std::vector<ledger::DayTotal>& days,
+                      bool income, std::chrono::year_month month)
+{
+    ui.rect(id + ".bg")
+        .position(x, y).size(width, height).radius(12.0f)
+        .color(colors::kColumnBg).border(1.0f, colors::kCardBorder).build();
+
+    std::int64_t maxCents = 1;
+    std::int64_t sumCents = 0;
+    for (const auto& day : days)
+    {
+        const auto value = income ? day.incomeCents : day.expenseCents;
+        maxCents         = std::max(maxCents, value);
+        sumCents += value;
+    }
+
+    char title[96];
+    std::snprintf(title, sizeof(title), "每日%s（%u 月，合计 %s）", income ? "收入" : "支出",
+                  static_cast<unsigned>(month.month()), ledger::formatCents(sumCents).c_str());
+
+    ui.text(id + ".title")
+        .position(x + 16.0f, y + 10.0f).size(width - 32.0f, kLineCaption)
+        .text(title).fontSize(kFontCaption).color(colors::kMuted).build();
+
+    if (days.empty()) { return; }
+
+    ui.text(id + ".max")
+        .position(x + width - 160.0f, y + 10.0f).size(144.0f, kLineCaption)
+        .text("最高 " + ledger::formatCents(maxCents)).fontSize(kFontCaption)
+        .horizontalAlign(eui::HorizontalAlign::Right)
+        .color(colors::kMuted).build();
+
+    const float chartTop    = y + 40.0f;
+    const float chartHeight = std::max(40.0f, height - 40.0f - 22.0f);
+    const float slotWidth   = (width - 32.0f) / static_cast<float>(days.size());
+    const float barWidth    = std::max(4.0f, slotWidth - 4.0f);
+
+    for (const auto& day : days)
+    {
+        const std::int64_t value = income ? day.incomeCents : day.expenseCents;
+        const float        slotX = x + 16.0f + static_cast<float>(day.day - 1) * slotWidth;
+        const float        barH  = chartHeight * static_cast<float>(value) /
+                           static_cast<float>(maxCents);
+        const bool selected = state.chartsDay == day.day;
+
+        // 点击整条"槽"而不是只有柱子：柱子可能只有 2px 高，点不到
+        ui.stack(id + ".slot." + std::to_string(day.day))
+            .position(slotX, chartTop)
+            .size(slotWidth, chartHeight)
+            .onClick([&state, day = day.day] {
+                repaint();
+                state.chartsDay = (state.chartsDay == day) ? 0u : day;   // 再点一次取消
+            })
+            .content([&] {
+                if (selected)
+                {
+                    ui.rect(id + ".slotbg." + std::to_string(day.day))
+                        .position(0.0f, 0.0f).size(slotWidth, chartHeight)
+                        .radius(3.0f).color(colors::kTodayBg).build();
+                }
+
+                if (value <= 0) { return; }
+
+                ui.rect(id + ".bar." + std::to_string(day.day))
+                    .position(2.0f, chartHeight - barH)
+                    .size(barWidth, std::max(2.0f, barH))
+                    .radius(2.0f)
+                    .color(selected ? colors::kAccent
+                                    : (income ? colors::kKindNote : colors::kKindTodo))
+                    .build();
+            })
+            .build();
+
+        // x 轴：每 5 天标一个数字，避免 31 个数字糊成一片
+        if (day.day == 1 || day.day % 5 == 0)
+        {
+            ui.text(id + ".day." + std::to_string(day.day))
+                .position(slotX, chartTop + chartHeight + 3.0f).size(slotWidth, kLineCaption)
+                .text(std::to_string(day.day)).fontSize(kFontCaption)
+                .horizontalAlign(eui::HorizontalAlign::Center)
+                .color(colors::kMuted).build();
+        }
+    }
+}
 // 近 N 个月支出柱状图（纯 rect，不需要额外组件）
 void composeTrend(eui::Ui& ui, const std::string& id, float x, float y, float width, float height,
                   const std::vector<ledger::MonthTotal>& months)
@@ -237,6 +323,21 @@ void composeChartsView(eui::Ui& ui, AppState& state, const PageRect& area, float
 
     const float y0 = topY;
 
+    // ---- 模式切换：构成 / 每日 ----
+    composeChip(ui, "charts.mode.composition", area.x, y0, 84.0f, "构成",
+                [&state] { state.chartsMode = ChartsMode::Composition; });
+    composeChip(ui, "charts.mode.daily", area.x + 92.0f, y0, 84.0f, "每日",
+                [&state] { state.chartsMode = ChartsMode::Daily; });
+
+    // 选中态：用一条细线标在下面（chip 本身不带状态，避免和账本页的 tab 混淆）
+    ui.rect(state.chartsMode == ChartsMode::Composition ? "charts.mode.underline.composition"
+                                                        : "charts.mode.underline.daily")
+        .position(state.chartsMode == ChartsMode::Composition ? area.x : area.x + 92.0f,
+                  y0 + kChipHeight - 3.0f)
+        .size(84.0f, 3.0f).radius(1.5f).color(colors::kAccent).build();
+
+    const float contentY = y0 + kChipHeight + 12.0f;
+
     // 本月合计（用 ledger 层算，和账本页同一个口径）
     ledger::Summary summary;
     {
@@ -245,8 +346,57 @@ void composeChartsView(eui::Ui& ui, AppState& state, const PageRect& area, float
         else { state.ledgerError = loaded.error(); }
     }
 
+    if (state.chartsMode == ChartsMode::Daily)
+    {
+        // ---- 每日模式：两张柱状图 + 选中日详情 ----
+        std::vector<ledger::DayTotal> days;
+        {
+            ledger::Book book{ ledgerFilePath() };
+            if (auto loaded = book.load(); loaded)
+            {
+                days = ledger::dayTotals(book.list(), state.ledgerMonth);
+            }
+        }
+
+        const float chartHeight = std::min(210.0f, (area.height - contentY - 80.0f) * 0.5f);
+
+        composeDailyBars(ui, state, "charts.daily.expense", area.x, contentY, area.width,
+                         chartHeight, days, false, state.ledgerMonth);
+
+        composeDailyBars(ui, state, "charts.daily.income", area.x, contentY + chartHeight + 10.0f,
+                         area.width, chartHeight, days, true, state.ledgerMonth);
+
+        // 选中那天的明细
+        const float detailY = contentY + chartHeight * 2.0f + 20.0f;
+
+        if (state.chartsDay >= 1 && state.chartsDay <= days.size())
+        {
+            const auto& selected = days[state.chartsDay - 1];
+
+            char text[192];
+            std::snprintf(text, sizeof(text), "%u 月 %u 日　支出 %s　收入 %s　共 %u 笔",
+                          static_cast<unsigned>(state.ledgerMonth.month()), selected.day,
+                          ledger::formatCents(selected.expenseCents).c_str(),
+                          ledger::formatCents(selected.incomeCents).c_str(),
+                          static_cast<unsigned>(selected.count));
+
+            ui.text("charts.daily.detail")
+                .position(area.x, detailY).size(area.width, kLineBody)
+                .text(text).fontSize(kFontBody).color(colors::kText).build();
+        }
+        else
+        {
+            ui.text("charts.daily.hint")
+                .position(area.x, detailY).size(area.width, kLineCaption)
+                .text("点某一天的柱子看当天合计（再点一次取消）")
+                .fontSize(kFontCaption).color(colors::kMuted).build();
+        }
+
+        return;
+    }
+
     // ---- 两个饼 + 图例 ----
-    const float pieY = y0;
+    const float pieY = contentY;
 
     composePieWithLegend(ui, "charts.pie.expense", area.x, pieY, "支出构成",
                          summary.byCategory, summary.expenseCents);

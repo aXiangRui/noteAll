@@ -46,6 +46,18 @@ std::vector<MonthTotal> monthlyTotals(std::vector<Transaction> const& visible,
                                       std::chrono::year_month          lastMonth,
                                       int                              count);
 
+/** 某个月的每一天（1..当月天数）合计，给"每日"图表用。 */
+struct DayTotal
+{
+    unsigned     day          = 0;
+    std::int64_t expenseCents = 0;
+    std::int64_t incomeCents  = 0;
+    std::size_t  count        = 0;
+};
+
+std::vector<DayTotal> dayTotals(std::vector<Transaction> const& visible,
+                                std::chrono::year_month          month);
+
 class Book
 {
 public:

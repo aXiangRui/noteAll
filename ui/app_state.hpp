@@ -25,6 +25,12 @@ enum class LedgerView
     Charts,   // 图表（收支构成 / 近 6 个月趋势）
 };
 
+enum class ChartsMode
+{
+    Composition,   // 构成（饼图 + 近 6 个月趋势）
+    Daily,         // 每日（每天一根柱子，支出/收入各一张）
+};
+
 enum class Page
 {
     Week,        // 周视图（当前默认）
@@ -63,6 +69,8 @@ struct AppState
     std::chrono::year_month          ledgerMonth{};   // 当前看的月份
     LedgerView                       ledgerView = LedgerView::List;
     float                            ledgerScroll = 0.0f;   // 列表滚动偏移（像素）
+    ChartsMode                       chartsMode = ChartsMode::Composition;
+    unsigned                         chartsDay = 0;          // 每日视图中选中的日（0 = 未选）
     std::string                      ledgerError;
     bool                             ledgerLoaded = false;
 

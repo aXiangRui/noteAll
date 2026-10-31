@@ -218,4 +218,37 @@ std::vector<MonthTotal> monthlyTotals(std::vector<Transaction> const& visible,
     return totals;
 }
 
+std::vector<DayTotal> dayTotals(std::vector<Transaction> const& visible,
+                                std::chrono::year_month          month)
+{
+    std::vector<DayTotal> totals;
+
+    // 当月天数：用 year_month_day_last，2 月闰年自动对
+    const std::chrono::year_month_day_last lastDay{ month.year(), month.month() / std::chrono::last };
+    const unsigned                          days = static_cast<unsigned>(lastDay.day());
+
+    totals.reserve(days);
+    for (unsigned day = 1; day <= days; ++day) { totals.push_back(DayTotal{ day, 0, 0, 0 }); }
+
+    // 中间那些天没记账也要占格（0），否则柱状图的 x 轴会错位
+    const auto* tz = std::chrono::current_zone();
+
+    for (const auto& t : visible)
+    {
+        const std::chrono::zoned_time     zt{ tz, t.occurred };
+        const std::chrono::year_month_day ymd{
+            std::chrono::floor<std::chrono::days>(zt.get_local_time()) };
+        if (std::chrono::year_month{ ymd.year(), ymd.month() } != month) { continue; }
+
+        const unsigned day = static_cast<unsigned>(ymd.day());
+        if (day < 1 || day > days) { continue; }
+
+        DayTotal& total = totals[day - 1];
+        ++total.count;
+        if (t.direction == Direction::Income) { total.incomeCents += t.amountCents; }
+        else { total.expenseCents += t.amountCents; }
+    }
+
+    return totals;
+}
 }  // namespace ledger

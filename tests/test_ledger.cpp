@@ -238,3 +238,42 @@ TEST_CASE("monthlyTotals：近 6 个月按月分桶，最老在前")
     // 没记账的月份是 0，不是漏掉
     CHECK(months[0].expenseCents == 0);
 }
+
+TEST_CASE("dayTotals：每一天一个桶，没记账的天是 0")
+{
+    const auto file = scratchFile("daily.jsonl");
+
+    ledger::Book book{ file };
+    REQUIRE(book.load().has_value());
+
+    // 上海时间：10-30 两笔支出、10-01 一笔收入、9 月一笔（不该计入 10 月）
+    REQUIRE(book.add(3200, ledger::Direction::Expense, utcAt(30, 4), "餐饮", "午饭", utcAt(30, 4)).has_value());
+    REQUIRE(book.add(1200, ledger::Direction::Expense, utcAt(30, 5), "交通", "打车", utcAt(30, 5)).has_value());
+    REQUIRE(book.add(500000, ledger::Direction::Income,
+                     sys_days{ year{ 2026 } / 10 / 1 } + hours{ 4 }, "工资", "工资", utcAt(1, 4)).has_value());
+    REQUIRE(book.add(9999, ledger::Direction::Expense,
+                     sys_days{ year{ 2026 } / 9 / 30 } + hours{ 4 }, "餐饮", "9月", utcAt(30, 4)).has_value());
+
+    const auto days = ledger::dayTotals(book.list(), year{ 2026 } / 10);
+    REQUIRE(days.size() == 31);                 // 10 月有 31 天
+
+    CHECK(days[0].day == 1);
+    CHECK(days[0].incomeCents == 500000);
+    CHECK(days[0].expenseCents == 0);
+
+    CHECK(days[29].day == 30);
+    CHECK(days[29].expenseCents == 4400);       // 32 + 12
+    CHECK(days[29].count == 2);
+
+    CHECK(days[15].expenseCents == 0);          // 16 号没记账 → 0，不是漏掉
+    CHECK(days[15].count == 0);
+}
+
+TEST_CASE("dayTotals：2 月天数按闰年算")
+{
+    ledger::Book empty{ scratchFile("daily-feb.jsonl") };
+    REQUIRE(empty.load().has_value());
+
+    CHECK(ledger::dayTotals(empty.list(), year{ 2026 } / 2).size() == 28);   // 平年
+    CHECK(ledger::dayTotals(empty.list(), year{ 2028 } / 2).size() == 29);   // 闰年
+}
