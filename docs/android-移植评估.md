@@ -146,3 +146,120 @@ cd Android
 - NDK 28 能不能编过（可能要压 CMake 4.x 的兼容性警告）；
 - 首次 Gradle 构建要联网（Gradle 发行包 + SDL2 源码）；
 - EUI 在 Android 上的**中文输入法**支持（真要做编辑功能必须先验，跟 Windows 那次一样）。
+
+---
+
+## 七、实测结论（2026-10-31，用 NDK clang 直接编译，未联网）
+
+上一节的"风险"现在已经变成**硬事实**。用 NDK 28.2 的 clang 19 直接编译我们的源码
+（`--target=aarch64-linux-android26 -std=c++23`，不经过 Gradle）：
+
+### 1. Android 的 libc++ 完全没有时区库
+
+```text
+$ clang++ --target=aarch64-linux-android26 -std=c++23 -c tz_probe.cpp
+error: RESULT_NO_TZDB        ← <chrono> 里定义了 _LIBCPP_HAS_NO_TIME_ZONE_DATABASE
+```
+
+不是"tzdata 可能缺失"，而是 **`std::chrono::time_zone` / `zoned_time` /
+`current_zone()` / `local_info` 这些类型在 Android 上根本不存在**（整个 API 被编译掉）。
+
+我们代码里的用量：
+
+| 范围 | 数量 |
+|---|---|
+| 出现次数 | **76 处** |
+| 涉及文件 | **21 个**（calendar / time_input / entry_service / book / bill / corpus / 各 UI 页 / draft_runner） |
+
+→ 移植必须自己做一层时区抽象（Windows 用系统 tzdb，Android 用固定偏移），
+**这是整个移植里最大的一块，且它动的是数据层不是 UI**。
+
+### 2. 连 `std::chrono::from_stream` 都没有
+
+```text
+src/core/store.cpp:50: error: no member named 'from_stream' in namespace 'std::chrono'
+```
+
+读 `"2026-10-30T12:00:00Z"` 就靠它。要改成自己写 ISO-8601 解析
+（`app/time_input` 里已经有一份手写解析，思路现成）。
+
+### 3. 文件锁的 POSIX 分支编不过
+
+```text
+src/core/file_lock.cpp:91: error: no member named 'open' in the global namespace
+                            use of undeclared identifier 'O_CREAT'
+```
+
+缺 `<fcntl.h>` 之类的 include，小修。
+
+### 4. 编译探针结果汇总（19 个非 UI 源文件）
+
+| 结果 | 数量 | 原因 |
+|---|---|---|
+| 通过 | 9 | 纯逻辑（parse / money / 部分 core） |
+| 失败 | 10 | 时区 API（6）+ `from_stream`（2）+ POSIX 锁（1）+ include 路径（1，探针自身问题） |
+
+**`std::expected` 本身没问题** —— NDK clang 19 完全支持 C++23。
+
+### 5. EUI 分支情况要修正上一节的说法
+
+| 分支 | 有无 Android 支持 |
+|---|---|
+| `Android`（c821f22，基于 v0.5.1.x） | ✅ 完整 gradle + JNI 工程 |
+| `main`（v0.6.2，我们 vendored 的就是它） | ❌ 没有 |
+| `dev` | ❌ 没有 |
+
+所以**不能"把 Android/ 拷过来"** —— `Android/` 目录依赖那个分支自己的源码状态
+（v0.5.1 的 `core/dsl.h`、`components/`）。我们 vendored 的是 v0.6.0+，
+`components::pieChart`、`input` 的 API 签名都可能对不上，属于**未知工作量**。
+
+Android 分支固定参数：Gradle 9.4.1（要下 ~150MB）、AGP（Google Maven）、
+SDL2 2.32.10（要下）、`ndkVersion 27.0.12077973`（本机只有 28.2）、
+`minSdk 26`、`compileSdk 36`、`abiFilters arm64-v8a`、**Vulkan only**、`CMAKE_CXX_STANDARD 17`。
+
+**文本输入可行**：`core/platform/platform.cpp:775` 有 `SDL_StartTextInput()`，
+软键盘能弹（比 Windows 那次的 IME 简单）。
+
+### 6. 比编译更麻烦的是尺寸
+
+```text
+当前窗口   1320×760 固定像素，全部绝对定位
+典型手机   1080×2400 px ≈ 411×914 dp
+```
+
+7 列周视图在 411dp 宽下每列约 55dp，卡片标题放不下；侧栏 216px 占掉一半屏宽；
+账本 4 列（时间/金额/分类/备注）会挤成一团。
+
+**所以就算编译通过，打开也是坏的** —— 手机需要一套独立布局（底部 tab + 单列 + 更大字号）。
+
+### 7. 本轮结论
+
+**决定：暂不做（2026-10-31）。** 理由不是"做不了"，是**投入产出不划算**：
+真正的工作量在（a）时区抽象（数据层重构，影响 21 个文件）、
+（b）EUI v0.5/v0.6 API 对齐（未知）、（c）手机专用布局（独立设计）。
+这三件都不是"打包"，加起来至少 2–3 天，而当前阶段功能还在快速变化。
+
+### 8. 什么时候值得重新启动
+
+满足**任意两条**再做：
+
+1. 你在手机上真的需要"随时记一笔 / 随时看这个月花了多少"（现在手机浏览器/微信都能临时应付）；
+2. 桌面版功能稳定了，两周内没再改数据模型；
+3. 有人（包括你）愿意每天用手机版，而不是偶尔 demo。
+
+### 9. 如果将来要做，按这个顺序
+
+| 步 | 内容 | 与 Android 的关系 | 估时 |
+|---|---|---|---|
+| 1 | 自己写 ISO-8601 解析/格式化，替掉 `from_stream` | 与平台无关；顺手让存档解析更可控 | 1–2 小时 |
+| 2 | `app::Zone` 时区抽象（Windows 用 tzdb，Android 用固定偏移） | 顺带修一个真 bug：系统 tzdb 缺失时现在会**抛异常崩溃** | 半天 |
+| 3 | POSIX 文件锁 include 补齐 + `llm` 非 Windows 桩 | 让全部非 UI 库能被 NDK clang 编译通过（**可离线验证**） | 1–2 小时 |
+| 4 | 拉 EUI 的 `Android` 分支做 demo APK（联网 + NDK 27 约 1GB） | 只验证构建链，不动我们的代码 | 1 小时（网速决定） |
+| 5 | 手机专用布局（单列 + 底部 tab） | 新页面，不复用 7 列周视图 | 1 天 |
+| 6 | JNI 入口 + 数据目录注入 + 真机安装 | 需要一台支持 Vulkan 的 Android 8.0+ 设备 | 半天 |
+
+第 1–3 步是**纯粹的健壮化**，就算永远不出 APK 也值得做；第 4 步是唯一需要联网的；
+第 5–6 步才是真正的移植。
+
+> 本机现状：`adb devices` 为空（没有连接设备）。真要装 APK 测试，得先插一台
+> 支持 Vulkan 的手机，或下载一个模拟器系统镜像（约 1GB）。
