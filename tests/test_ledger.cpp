@@ -361,3 +361,70 @@ TEST_CASE("recategorizeOthers：只动「其他」，不动已分类的")
     CHECK(other == 1);
     CHECK(untouched == 1);   // 手动分类的不被覆盖
 }
+
+
+TEST_CASE("payeeTotals：按支付对象汇总，空对象归到「未标注」")
+{
+    const auto file = scratchFile("payees.jsonl");
+
+    ledger::Book book{ file };
+    REQUIRE(book.load().has_value());
+
+    REQUIRE(book.add(3200, ledger::Direction::Expense, utcAt(30, 4), "餐饮", "麦当劳 汉堡",
+                     utcAt(30, 4), "", "麦当劳").has_value());
+    REQUIRE(book.add(1800, ledger::Direction::Expense, utcAt(30, 5), "餐饮", "麦当劳 可乐",
+                     utcAt(30, 5), "", "麦当劳").has_value());
+    REQUIRE(book.add(5000, ledger::Direction::Expense, utcAt(30, 6), "交通", "滴滴出行 快车",
+                     utcAt(30, 6), "", "滴滴出行").has_value());
+    REQUIRE(book.add(900, ledger::Direction::Expense, utcAt(30, 7), "其他", "手工记的",
+                     utcAt(30, 7)).has_value());   // 没有 payee
+
+    const auto totals = book.payeeTotals(year{ 2026 } / 10);
+    REQUIRE(totals.size() == 3);
+
+    CHECK(totals[0].payee == "滴滴出行");     // 金额降序
+    CHECK(totals[0].expenseCents == 5000);
+    CHECK(totals[0].count == 1);
+
+    CHECK(totals[1].payee == "麦当劳");
+    CHECK(totals[1].expenseCents == 5000);    // 32 + 18
+    CHECK(totals[1].count == 2);
+
+    CHECK(totals[2].payee.empty());           // 未标注
+    CHECK(totals[2].expenseCents == 900);
+}
+
+TEST_CASE("backfillPayees：从备注取第一个词，且不会切断 UTF-8")
+{
+    const auto file = scratchFile("backfill-payee.jsonl");
+
+    ledger::Book book{ file };
+    REQUIRE(book.load().has_value());
+
+    // 关键用例：全角逗号的尾字节 0x8C 与「行」的最后一字节相同，
+    // 用 find_first_of 逐字节匹配会把字符切成两半（真崩过一次）。
+    REQUIRE(book.add(1800, ledger::Direction::Expense, utcAt(30, 4), "交通", "滴滴出行，快车",
+                     utcAt(30, 4)).has_value());
+    REQUIRE(book.add(3200, ledger::Direction::Expense, utcAt(30, 5), "餐饮", "麦当劳 汉堡",
+                     utcAt(30, 5)).has_value());
+    REQUIRE(book.add(100, ledger::Direction::Expense, utcAt(30, 6), "其他", "整段没有分隔符",
+                     utcAt(30, 6)).has_value());
+
+    const auto preview = book.backfillPayees(false);
+    REQUIRE(preview.has_value());
+    CHECK(preview->scanned == 3);
+    CHECK(preview->filled == 3);
+
+    const auto applied = book.backfillPayees(true);
+    REQUIRE(applied.has_value());
+
+    ledger::Book reopened{ file };
+    REQUIRE(reopened.load().has_value());
+
+    for (const auto& t : reopened.list())
+    {
+        CHECK_FALSE(t.payee.empty());
+        if (t.note.find("滴滴") != std::string::npos) { CHECK(t.payee == "滴滴出行"); }
+        if (t.note.find("麦当劳") != std::string::npos) { CHECK(t.payee == "麦当劳"); }
+    }
+}

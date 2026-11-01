@@ -56,7 +56,7 @@ std::expected<ImportOutcome, std::string> importBill(ledger::Book&          book
         if (commit)
         {
             auto added = book.add(row.amountCents, row.direction, row.occurred, row.category, row.note,
-                                  now, row.externalId);
+                                  now, row.externalId, row.payee);
             if (!added) { return std::unexpected("写入账本失败: " + added.error()); }
         }
 

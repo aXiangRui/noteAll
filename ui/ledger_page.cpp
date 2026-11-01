@@ -480,6 +480,152 @@ void composeLedgerImportPanel(eui::Ui& ui, AppState& state, const PageRect& area
                       repaint();
                   });
 }
+
+/** 「按对象」视图：谁拿走了我的钱（金额降序，可点击筛选列表）。 */
+void composePayeeList(eui::Ui& ui, AppState& state, const PageRect& area, float topY)
+{
+    // 每次进这个视图都重新算（月份/数据会变，缓存容易失效）
+    {
+        ledger::Book book{ ledgerFilePath() };
+        if (auto loaded = book.load(); loaded)
+        {
+            state.ledgerPayees = book.payeeTotals(state.ledgerMonth);
+        }
+    }
+
+    std::int64_t total = 0;
+    for (const auto& item : state.ledgerPayees) { total += item.expenseCents; }
+
+    char header[128];
+    std::snprintf(header, sizeof(header), "%u 月按支付对象（支出 %s，共 %zu 个对象）",
+                  static_cast<unsigned>(state.ledgerMonth.month()),
+                  ledger::formatCents(total).c_str(), state.ledgerPayees.size());
+
+    ui.text("ledger.payees.title")
+        .position(area.x, topY).size(area.width, kLineCaption)
+        .text(header).fontSize(kFontCaption).color(colors::kMuted).build();
+
+    const float listTop    = topY + kLineCaption + 6.0f;
+    const float listHeight = std::max(120.0f, area.y + area.height - listTop - 8.0f);
+    const float rowHeight  = 32.0f;
+
+    ui.rect("ledger.payees.bg")
+        .position(area.x, listTop).size(area.width, listHeight)
+        .radius(12.0f).color(colors::kColumnBg).border(1.0f, colors::kCardBorder).build();
+
+    // 列：对象 / 金额 / 笔数 / 占比（占比条画在金额列后面，直观看出谁占大头）
+    const float padX     = 16.0f;
+    const float colName  = area.width * 0.42f;
+    const float colMoney = 140.0f;
+    const float colCount = 90.0f;
+    const float colShare = 70.0f;
+
+    ui.text("ledger.payees.head.name")
+        .position(area.x + padX, listTop + 8.0f).size(colName, kLineCaption)
+        .text("支付对象").fontSize(kFontCaption).color(colors::kMuted).build();
+    ui.text("ledger.payees.head.money")
+        .position(area.x + padX + colName, listTop + 8.0f).size(colMoney, kLineCaption)
+        .text("支出").fontSize(kFontCaption).color(colors::kMuted).build();
+    ui.text("ledger.payees.head.count")
+        .position(area.x + padX + colName + colMoney, listTop + 8.0f).size(colCount, kLineCaption)
+        .text("笔数").fontSize(kFontCaption).color(colors::kMuted).build();
+    ui.text("ledger.payees.head.share")
+        .position(area.x + padX + colName + colMoney + colCount, listTop + 8.0f)
+        .size(colShare, kLineCaption)
+        .text("占比").fontSize(kFontCaption).color(colors::kMuted).build();
+
+    const float maxOffset = std::max(
+        0.0f, static_cast<float>(state.ledgerPayees.size()) * rowHeight - (listHeight - 44.0f));
+    state.ledgerScroll = std::clamp(state.ledgerScroll, 0.0f, maxOffset);
+
+    ui.stack("ledger.payees.rows")
+        .position(area.x, listTop + 30.0f)
+        .size(area.width, std::max(40.0f, listHeight - 38.0f))
+        .clip()
+        .scrollState("ledger.payees.rows", state.ledgerScroll, maxOffset, rowHeight * 1.5f)
+        .onScrollOffsetChanged([&state](float value) {
+            state.ledgerScroll = value;
+            repaint();
+        })
+        .content([&] {
+            float       rowY  = -state.ledgerScroll;
+            std::size_t index = 0;
+
+            for (const auto& item : state.ledgerPayees)
+            {
+                const std::string rowId = "ledger.payee." + std::to_string(index);
+                const std::string label = item.payee.empty() ? "（未标注）" : item.payee;
+                const int share = total > 0
+                                      ? static_cast<int>(item.expenseCents * 100 / total)
+                                      : 0;
+
+                // 整行可点：点一下回到列表，并且只显示这个对象
+                ui.stack(rowId)
+                    .position(0.0f, rowY)
+                    .size(area.width, rowHeight)
+                    .onClick([&state, payee = item.payee] {
+                        repaint();
+                        state.ledgerPayeeFilter = payee;
+                        state.ledgerView        = LedgerView::List;
+                        state.ledgerScroll      = 0.0f;
+                    })
+                    .content([&] {
+                        if (index % 2 == 1)
+                        {
+                            ui.rect(rowId + ".bg")
+                                .position(6.0f, 0.0f).size(area.width - 12.0f, rowHeight)
+                                .radius(6.0f).color(colors::kPageBg).build();
+                        }
+
+                        // 占比条：一眼看出谁占大头（长度按占比，最多到列宽）
+                        const float barWidth = (area.width - padX * 2.0f - colMoney - colCount -
+                                                colShare) * static_cast<float>(share) / 100.0f;
+                        if (barWidth > 1.0f)
+                        {
+                            ui.rect(rowId + ".bar")
+                                .position(padX, rowHeight - 4.0f)
+                                .size(std::max(2.0f, barWidth), 2.0f)
+                                .radius(1.0f).color(colors::kAccent).build();
+                        }
+
+                        ui.text(rowId + ".name")
+                            .position(padX, 6.0f).size(colName - 8.0f, kLineCaption)
+                            .text(app::elideToFit(label, colName - 8.0f, kFontCaption, 1))
+                            .fontSize(kFontCaption).color(colors::kText).build();
+
+                        ui.text(rowId + ".money")
+                            .position(padX + colName, 6.0f).size(colMoney, kLineCaption)
+                            .text(ledger::formatCents(item.expenseCents))
+                            .fontSize(kFontCaption).color(colors::kKindTodo).build();
+
+                        ui.text(rowId + ".count")
+                            .position(padX + colName + colMoney, 6.0f).size(colCount, kLineCaption)
+                            .text(std::to_string(item.count) + " 笔")
+                            .fontSize(kFontCaption).color(colors::kMuted).build();
+
+                        ui.text(rowId + ".share")
+                            .position(padX + colName + colMoney + colCount, 6.0f)
+                            .size(colShare, kLineCaption)
+                            .text(std::to_string(share) + "%")
+                            .fontSize(kFontCaption).color(colors::kMuted).build();
+                    })
+                    .build();
+
+                rowY += rowHeight;
+                ++index;
+            }
+        })
+        .build();
+
+    if (state.ledgerPayees.empty())
+    {
+        ui.text("ledger.payees.empty")
+            .position(area.x + padX, listTop + 34.0f).size(area.width - padX * 2.0f, kLineCaption)
+            .text("这个月还没有支出记录")
+            .fontSize(kFontCaption).color(colors::kMuted).build();
+    }
+}
+
 void composeLedgerPage(eui::Ui& ui, AppState& state, const PageRect& area)
 {
     if (!state.ledgerLoaded) { reloadLedger(state); }
@@ -496,13 +642,17 @@ void composeLedgerPage(eui::Ui& ui, AppState& state, const PageRect& area)
                   state.ledgerView == LedgerView::Charts,
                   [&state] { state.ledgerView = LedgerView::Charts; });
 
-    composeChip(ui, "ledger.prev", area.x + 168.0f, y0, 96.0f, "‹ 上一月", [&state] {
+    composeToggle(ui, "ledger.view.payees", area.x + 160.0f, y0 + 4.0f, 84.0f, "按对象",
+                  state.ledgerView == LedgerView::Payees,
+                  [&state] { state.ledgerView = LedgerView::Payees; });
+
+    composeChip(ui, "ledger.prev", area.x + 256.0f, y0, 96.0f, "‹ 上一月", [&state] {
         state.ledgerMonth -= std::chrono::months{ 1 };
         state.ledgerScroll = 0.0f;   // 换月后回到顶部
         state.chartsDay    = 0;      // 选中的日也要清（否则会显示上个月的某天）
     });
 
-    composeChip(ui, "ledger.now", area.x + 272.0f, y0, 80.0f, "本月", [&state] {
+    composeChip(ui, "ledger.now", area.x + 360.0f, y0, 80.0f, "本月", [&state] {
         const std::chrono::zoned_time     zt{ std::chrono::current_zone(), nowUtc() };
         const std::chrono::year_month_day today{
             std::chrono::floor<std::chrono::days>(zt.get_local_time()) };
@@ -511,7 +661,7 @@ void composeLedgerPage(eui::Ui& ui, AppState& state, const PageRect& area)
         state.chartsDay    = 0;
     });
 
-    composeChip(ui, "ledger.next", area.x + 360.0f, y0, 96.0f, "下一月 ›", [&state] {
+    composeChip(ui, "ledger.next", area.x + 448.0f, y0, 96.0f, "下一月 ›", [&state] {
         state.ledgerMonth += std::chrono::months{ 1 };
         state.ledgerScroll = 0.0f;
         state.chartsDay    = 0;
@@ -523,7 +673,7 @@ void composeLedgerPage(eui::Ui& ui, AppState& state, const PageRect& area)
                   static_cast<unsigned>(state.ledgerMonth.month()));
 
     ui.text("ledger.month")
-        .position(area.x + 468.0f, y0 + 8.0f)
+        .position(area.x + 556.0f, y0 + 8.0f)
         .size(160.0f, kLineCaption)
         .text(monthBuffer)
         .fontSize(kFontRange)
@@ -551,14 +701,48 @@ void composeLedgerPage(eui::Ui& ui, AppState& state, const PageRect& area)
 
     const float contentTop = y0 + kChipHeight + 12.0f;
 
-    if (state.ledgerView == LedgerView::Charts)
+    // 列表视图的对象筛选条：点了「按对象」里的某一行之后，要能看见"我在看谁"并一键清除
+    if (state.ledgerView == LedgerView::List && !state.ledgerPayeeFilter.empty())
+    {
+        const std::string label = "只看：";
+        const float chipW = 116.0f;
+
+        ui.text("ledger.filter.label")
+            .position(area.x, contentTop + 4.0f).size(60.0f, kLineCaption)
+            .text(label).fontSize(kFontCaption).color(colors::kMuted).build();
+
+        composeToggle(ui, "ledger.filter.clear", area.x + chipW, contentTop, 132.0f,
+                      state.ledgerPayeeFilter + "  ✕", true, [&state] {
+                          state.ledgerPayeeFilter.clear();
+                          state.ledgerScroll = 0.0f;
+                      });
+    }
+
+
+    if (state.ledgerView == LedgerView::Payees)
+    {
+        composePayeeList(ui, state, area, contentTop);
+    }
+    else if (state.ledgerView == LedgerView::Charts)
     {
         composeChartsView(ui, state, area, contentTop);
     }
     else
     {
     // ---- 汇总 ----
-    const auto rows = monthRows(state, state.ledgerMonth);
+    const auto allRows = monthRows(state, state.ledgerMonth);
+
+    // 对象筛选：只看某个支付对象的流水
+    std::vector<ledger::Transaction const*> rows;
+    rows.reserve(allRows.size());
+    for (const auto* entry : allRows)
+    {
+        if (!state.ledgerPayeeFilter.empty() && entry->payee != state.ledgerPayeeFilter)
+        {
+            continue;
+        }
+        rows.push_back(entry);
+    }
 
     std::int64_t expense = 0;
     std::int64_t income  = 0;
@@ -567,7 +751,10 @@ void composeLedgerPage(eui::Ui& ui, AppState& state, const PageRect& area)
         (t->direction == ledger::Direction::Income ? income : expense) += t->amountCents;
     }
 
-    const float summaryY = y0 + kChipHeight + 10.0f;
+    const float filterHeight =
+        (state.ledgerView == LedgerView::List && !state.ledgerPayeeFilter.empty()) ? 38.0f : 0.0f;
+
+    const float summaryY = y0 + kChipHeight + 10.0f + filterHeight;
     composeSummary(ui, state, area, summaryY, expense, income, rows.size());
 
     // ---- 列表 ----

@@ -2,6 +2,7 @@
 
 #include <nlohmann/json.hpp>
 
+#include <cstdio>
 #include <format>
 #include <fstream>
 #include <optional>
@@ -43,6 +44,7 @@ json toJson(Transaction const& t)
         { "note",         t.note },
         { "created_at",   toIsoUtc(t.created_at) },
         { "external_id",  t.external_id },
+        { "payee",        t.payee },
     };
 
     if (t.deleted_at) { j["deleted_at"] = toIsoUtc(*t.deleted_at); }
@@ -60,6 +62,7 @@ std::optional<Transaction> fromJson(json const& j)
     t.category    = j.value("category", std::string{ "其他" });
     t.note        = j.value("note", std::string{});
     t.external_id = j.value("external_id", std::string{});
+    t.payee       = j.value("payee", std::string{});
     if (t.id.empty() || t.amountCents <= 0) { return std::nullopt; }
 
     const auto occurred = fromIsoUtc(j.value("occurred", std::string{}));
@@ -144,7 +147,21 @@ std::expected<void, std::string> save(std::filesystem::path const&    file,
         if (!out) { return std::unexpected("写不了临时文件: " + tmp.string()); }
 
         out << R"({"schema": )" << kSchemaVersion << "}\n";
-        for (const auto& t : transactions) { out << toJson(t).dump() << '\n'; }
+        for (const auto& t : transactions)
+        {
+            // dump 会对非法 UTF-8 抛异常；一条脏数据不该让整个进程 abort，
+            // 要变成可读的错误返回给上层。
+            std::string line;
+            try
+            {
+                line = toJson(t).dump();
+            }
+            catch (std::exception const& ex)
+            {
+                return std::unexpected("记录 " + t.id + " 无法序列化: " + ex.what());
+            }
+            out << line << '\n';
+        }
 
         if (!out) { return std::unexpected("写入失败: " + tmp.string()); }
     }   // 句柄必须关掉再 rename（Windows 上不关会失败）

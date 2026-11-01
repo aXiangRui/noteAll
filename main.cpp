@@ -749,9 +749,11 @@ int execute(const std::vector<std::string>& args,
         if (sub == "list")
         {
             std::string monthText;
+            std::string payeeFilter;
             for (std::size_t i = 3; i < args.size(); ++i)
             {
                 if (args[i] == "--month" && i + 1 < args.size()) { monthText = args[++i]; }
+                if (args[i] == "--payee" && i + 1 < args.size()) { payeeFilter = args[++i]; }
             }
 
             const auto month = monthOf(monthText);
@@ -767,6 +769,7 @@ int execute(const std::vector<std::string>& args,
                     std::chrono::floor<std::chrono::days>(zt.get_local_time()) };
                 const std::chrono::year_month ym{ day.year(), day.month() };
                 if (ym != *month) { continue; }
+                if (!payeeFilter.empty() && t.payee != payeeFilter) { continue; }
 
                 std::cout << app::formatLocalDateTime(t.occurred, *tz) << "  "
                           << (t.direction == ledger::Direction::Income ? "+" : "-")
@@ -872,6 +875,66 @@ int execute(const std::vector<std::string>& args,
                 if (auto loaded = after.load(); loaded) { book = std::move(after); }
                 distribution("\n— 重排之后（支出）—");
             }
+            return 0;
+        }
+
+        if (sub == "payees")
+        {
+            std::string monthText;
+            bool        includeIncome = false;
+            for (std::size_t i = 3; i < args.size(); ++i)
+            {
+                if (args[i] == "--month" && i + 1 < args.size()) { monthText = args[++i]; }
+                if (args[i] == "--income") { includeIncome = true; }
+            }
+
+            const auto month = monthOf(monthText);
+            if (!month) { return fail("月份看不懂: " + monthText + "（格式 2026-10）"); }
+
+            const auto totals = book.payeeTotals(*month);
+
+            std::int64_t totalCents = 0;
+            for (const auto& item : totals)
+            {
+                totalCents += includeIncome ? item.incomeCents : item.expenseCents;
+            }
+
+            std::cout << static_cast<int>(month->year()) << "-"
+                      << static_cast<unsigned>(month->month()) << " 按支付对象（"
+                      << (includeIncome ? "收入" : "支出") << "，合计 "
+                      << ledger::formatCents(totalCents) << "）\n";
+
+            for (const auto& item : totals)
+            {
+                const std::int64_t cents = includeIncome ? item.incomeCents : item.expenseCents;
+                if (cents <= 0) { continue; }
+
+                const int share = totalCents > 0
+                                      ? static_cast<int>(cents * 100 / totalCents)
+                                      : 0;
+
+                std::cout << "  " << (item.payee.empty() ? "（未标注）" : item.payee)
+                          << "\t" << ledger::formatCents(cents) << "\t" << item.count
+                          << " 笔\t" << share << "%\n";
+            }
+
+            if (totals.empty()) { v.RenderMessage("这个月还没有记录"); }
+            return 0;
+        }
+
+        if (sub == "backfill-payee")
+        {
+            bool commit = false;
+            for (std::size_t i = 3; i < args.size(); ++i)
+            {
+                if (args[i] == "--commit") { commit = true; }
+            }
+
+            const auto result = book.backfillPayees(commit);
+            if (!result) { return fail(result.error()); }
+
+            std::cout << "缺支付对象 " << result->scanned << " 条，补上 " << result->filled << " 条"
+                      << (commit ? "（已写入）" : "（预览：加 --commit 才写入）") << "\n";
             return 0;
         }
 

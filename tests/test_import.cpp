@@ -108,6 +108,7 @@ TEST_CASE("bill：微信账单——跳过前导垃圾行，认出表头在第 5
     CHECK(first.category == "餐饮");
     CHECK(first.note == "美团 午饭");
     CHECK(first.externalId == "4200002000202610301234567890");
+    CHECK(first.payee == "美团");        // 「交易对方」单独存，供按对象统计
 
     // 收入行
     CHECK(ledger::toString(parsed.rows[2].direction) == "income");

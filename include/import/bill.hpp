@@ -34,6 +34,7 @@ struct BillRow
     std::string              category;
     std::string              note;
     std::string              externalId;   // 交易单号 / 交易号（去重靠它）
+    std::string              payee;        // 支付对象（交易对方）
     int                      lineNumber = 0;
 };
 

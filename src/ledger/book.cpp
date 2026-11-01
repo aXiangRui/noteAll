@@ -1,6 +1,7 @@
 #include "ledger/book.hpp"
 
 #include <algorithm>
+#include <iterator>
 #include <cstdio>
 #include <random>
 
@@ -62,7 +63,8 @@ std::expected<Transaction, std::string> Book::add(std::int64_t             amoun
                                                   std::string              category,
                                                   std::string              note,
                                                   std::chrono::sys_seconds createdAt,
-                                                  std::string              externalId)
+                                                  std::string              externalId,
+                                                  std::string              payee)
 {
     if (amountCents <= 0) { return std::unexpected("金额必须大于 0"); }
 
@@ -85,6 +87,7 @@ std::expected<Transaction, std::string> Book::add(std::int64_t             amoun
     t.note        = std::move(note);
     t.created_at  = createdAt;
     t.external_id = std::move(externalId);
+    t.payee       = std::move(payee);
 
     const auto before = all_;
     all_.push_back(t);
@@ -322,4 +325,100 @@ std::expected<Book::RecategorizeResult, std::string> Book::recategorizeOthers(bo
     reindex(all_, visible_);
     return result;
 }
+
+std::vector<PayeeSum> Book::payeeTotals(std::chrono::year_month month) const
+{
+    std::vector<PayeeSum> totals;
+    const auto*           tz = std::chrono::current_zone();
+
+    for (const auto& t : visible_)
+    {
+        const std::chrono::zoned_time      zt{ tz, t.occurred };
+        const std::chrono::year_month_day  ymd{
+            std::chrono::floor<std::chrono::days>(zt.get_local_time()) };
+        if (std::chrono::year_month{ ymd.year(), ymd.month() } != month) { continue; }
+
+        auto it = std::find_if(totals.begin(), totals.end(),
+                               [&](PayeeSum const& s) { return s.payee == t.payee; });
+        if (it == totals.end())
+        {
+            totals.push_back(PayeeSum{ t.payee, 1, 0, 0 });
+            it = std::prev(totals.end());
+        }
+        else
+        {
+            ++it->count;
+        }
+
+        if (t.direction == Direction::Income) { it->incomeCents += t.amountCents; }
+        else { it->expenseCents += t.amountCents; }
+    }
+
+    // 支出大的在前；只花过收入的排在后面
+    std::sort(totals.begin(), totals.end(), [](PayeeSum const& a, PayeeSum const& b) {
+        if (a.expenseCents != b.expenseCents) { return a.expenseCents > b.expenseCents; }
+        return a.payee < b.payee;
+    });
+    return totals;
+}
+
+std::expected<Book::BackfillResult, std::string> Book::backfillPayees(bool commit)
+{
+    BackfillResult result;
+
+    auto lock = core::FileLock::acquire(file_);
+    if (!lock)
+    {
+        core::appendLog(file_, core::LogLevel::Error, lock.error());
+        return std::unexpected(lock.error());
+    }
+
+    if (auto reloaded = ledger::load(file_); !reloaded)
+    {
+        return std::unexpected(reloaded.error());
+    }
+
+    const auto before = all_;
+
+    for (auto& t : all_)
+    {
+        if (t.deleted_at || !t.payee.empty()) { continue; }
+        ++result.scanned;
+
+        // 备注形如「麦当劳 板烧鸡腿堡」→ 取第一个词当支付对象。
+        //
+        // ⚠️ 这里**不能**用 find_first_of 传多字节分隔符：它按字节匹配，
+        // 全角逗号「，」是 EF BC 8C，尾字节 8C 正好撞上「行」(E8 A1 8C) 的最后一字节,
+        // 会把 UTF-8 字符切成两半 → 后续 json dump 抛异常 → 进程 abort。
+        // 所以逐个用 find(完整序列) 找最小的切点。
+        std::size_t cut = std::string::npos;
+        for (const std::string_view delimiter : { " ", "\t", "|", "/", ",", "，", "、" })
+        {
+            const auto position = t.note.find(delimiter);
+            if (position != std::string::npos) { cut = std::min(cut, position); }
+        }
+        const auto payee = cut == std::string::npos ? t.note : t.note.substr(0, cut);
+
+        if (payee.empty()) { continue; }
+        t.payee = payee;
+        ++result.filled;
+    }
+
+    if (!commit)
+    {
+        all_ = before;
+        return result;
+    }
+
+    if (auto saved = save(file_, all_); !saved)
+    {
+        all_ = before;
+        core::appendLog(file_, core::LogLevel::Error, saved.error());
+        return std::unexpected(saved.error());
+    }
+
+    reindex(all_, visible_);
+    return result;
+}
+
 }  // namespace ledger

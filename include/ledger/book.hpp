@@ -37,6 +37,15 @@ struct MonthTotal
     std::int64_t            incomeCents  = 0;
 };
 
+/** 某个支付对象的合计（"按对象看花了多少"）。 */
+struct PayeeSum
+{
+    std::string  payee;          // 空 = 未标注（手工记的账）
+    std::size_t  count = 0;
+    std::int64_t expenseCents = 0;
+    std::int64_t incomeCents = 0;
+};
+
 /**
  * 最近 count 个月的合计（含 lastMonth 往前数）。
  *
@@ -79,7 +88,8 @@ public:
                                                 std::string               category,
                                                 std::string               note,
                                                 std::chrono::sys_seconds  createdAt,
-                                                std::string               externalId = {});
+                                                std::string               externalId = {},
+                                                std::string               payee = {});
 
     std::expected<void, std::string> remove(
         std::string_view                        id,
@@ -107,6 +117,29 @@ public:
     };
 
     std::expected<RecategorizeResult, std::string> recategorizeOthers(bool commit);
+
+    /**
+     * 某个月按**支付对象**汇总（金额降序）。
+     *
+     * 空 payee 归到「未标注」—— 手工记的账或旧数据没有对象，不能丢。
+     */
+    std::vector<PayeeSum> payeeTotals(std::chrono::year_month month) const;
+
+    /**
+     * 给旧数据补 payee：从备注里取第一个词（空格/逗号前的部分）。
+     *
+     * 这是**启发式**，只用于补历史数据：备注是"交易对方 + 商品"拼的，
+     * 新导入的数据有独立的 payee 列，不需要这条规则。
+     *
+     * @param commit false = 只统计不落盘
+     */
+    struct BackfillResult
+    {
+        std::size_t scanned = 0;   // 缺 payee 的条数
+        std::size_t filled  = 0;   // 成功补上
+    };
+
+    std::expected<BackfillResult, std::string> backfillPayees(bool commit);
 
 private:
     std::filesystem::path          file_;

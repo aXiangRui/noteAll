@@ -7,6 +7,7 @@
 #include "app/calendar.hpp"
 #include "core/entry.hpp"
 #include "import/bill.hpp"
+#include "ledger/book.hpp"   // PayeeSum 在这里（汇总类型属于账本门面）
 #include "ledger/ledger.hpp"
 #include "eui_neo.h"
 
@@ -23,6 +24,7 @@ enum class LedgerView
 {
     List,     // 流水列表（默认）
     Charts,   // 图表（收支构成 / 近 6 个月趋势）
+    Payees,   // 按支付对象（看钱花在谁身上）
 };
 
 enum class ChartsMode
@@ -69,6 +71,8 @@ struct AppState
     std::chrono::year_month          ledgerMonth{};   // 当前看的月份
     LedgerView                       ledgerView = LedgerView::List;
     float                            ledgerScroll = 0.0f;   // 列表滚动偏移（像素）
+    std::string                      ledgerPayeeFilter;      // 非空 = 列表只显示这个支付对象
+    std::vector<ledger::PayeeSum>    ledgerPayees;           // 当月按对象汇总
     ChartsMode                       chartsMode = ChartsMode::Composition;
     unsigned                         chartsDay = 0;          // 每日视图中选中的日（0 = 未选）
     std::string                      ledgerError;

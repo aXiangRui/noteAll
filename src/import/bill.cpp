@@ -311,6 +311,7 @@ BillParseResult parseBill(std::string_view utf8Csv)
         billRow.category    = isTransfer ? "转账" : ledger::guessCategory(note, direction);
         billRow.note        = note;
         billRow.externalId  = cell(row, map.externalId);
+        billRow.payee       = counterparty;   // 「交易对方」单独存，供"按对象看花了多少"用
         billRow.lineNumber  = lineNumber;
 
         result.rows.push_back(std::move(billRow));
