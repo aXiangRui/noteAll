@@ -120,7 +120,9 @@ std::expected<void, std::string> Core::reloadForMutation()
 std::expected<Entry, std::string> Core::add(std::string_view         rawText,
                                             std::chrono::sys_seconds createdAt,
                                             std::optional<TimeRange> occurred,
-                                            TimeSource               source)
+                                            TimeSource               source,
+                                            std::string              sourceKey,
+                                            Source                   entrySource)
 {
     // 1) 锁 + 重读：拿磁盘上的最新状态，别用启动时的旧快照。
     auto lock = FileLock::acquire(path_);
@@ -147,6 +149,10 @@ std::expected<Entry, std::string> Core::add(std::string_view         rawText,
 
     // 时间来源：没有时间就必须是 None —— 不能出现"时间未知但来源写着规则"。
     e.occurred_source = e.occurred ? source : TimeSource::None;
+
+    // 导入去重键（聊天记录用）。空表示不是导入来的。
+    e.source_key = std::move(sourceKey);
+    e.source     = entrySource;   // 「这条记录哪来的」和「时间谁给的」是两回事
 
     // tags / kind / confirmed 保持默认（空、Unknown、false）——
     // 那些是 M2 的事。source 默认 Manual，导入路径由调用方改。

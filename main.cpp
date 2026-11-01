@@ -17,9 +17,11 @@
 #include <map>
 #include "ledger/money.hpp"
 #include "import/bill.hpp"
+#include "import/chat.hpp"
 #include "import/charset.hpp"
 #include "import/importer.hpp"
 #include "ledger/book.hpp"
+#include "app/chat_import.hpp"
 #include "app/entry_service.hpp"
 #include "core/core.hpp"
 #include "core/note_log.hpp"
@@ -188,6 +190,7 @@ void printHelp(std::ostream& os)
           "  note ledger add <文本>  记一笔（金额写句末：午饭 32）；--income / --at / --category\n"
           "  note ledger sum         本月汇总（--month 2026-10）\n"
           "  note ledger list        本月流水\n"
+          "  note import-chat <txt> 导入 QQ 聊天记录（预览；--commit 才写入）\n"
           "  note help               显示这个帮助\n"
           "\n"
           "  直接运行 note（不带参数）进入交互模式，命令里不用再写开头的 note：\n"
@@ -491,7 +494,8 @@ int execute(const std::vector<std::string>& args,
     const bool needsId = (cmd == "show" || cmd == "confirm" || cmd == "rm" || cmd == "undo" ||
                           cmd == "purge");
 
-    if (cmd != "add" && cmd != "list" && cmd != "draft" && cmd != "ledger" && !needsId)
+    if (cmd != "add" && cmd != "list" && cmd != "draft" && cmd != "ledger" &&
+        cmd != "import-chat" && !needsId)
     {
         v.RenderError("不认识的命令: " + cmd + "（输入 help 看用法）");
         return 1;
@@ -972,6 +976,67 @@ int execute(const std::vector<std::string>& args,
         return 0;
     }
 
+    // ---- import-chat：把 QQ 聊天记录导出成 note ----
+    //
+    // 微信没有官方导出，QQ 有（消息管理器 → 导出 .txt）。所以这条路径按 QQ 的格式做，
+    // 但解析器只认"时间 + 发送者 + 正文"，将来换工具只要转成同样的文本。
+    if (cmd == "import-chat")
+    {
+        if (args.size() < 3)
+        {
+            v.RenderError("用法：note import-chat <chat.txt> [--from-me 我] [--all] [--min-len 8] "
+                          "[--since 2026-09-01] [--until 2026-10-31] [--commit]");
+            return 1;
+        }
+
+        app::ChatImportOptions options;
+        std::string             path = args[2];
+        bool                    commit = false;
+
+        for (std::size_t i = 3; i < args.size(); ++i)
+        {
+            if (args[i] == "--from-me" && i + 1 < args.size()) { options.fromMe = args[++i]; }
+            else if (args[i] == "--all") { options.fromMe.clear(); }
+            else if (args[i] == "--min-len" && i + 1 < args.size())
+            {
+                options.minLength = static_cast<std::size_t>(std::stoul(args[++i]));
+            }
+            else if (args[i] == "--since" && i + 1 < args.size())
+            {
+                options.since = app::parseLocalDateTime(args[++i], app::nowUtc());
+                if (!options.since) { return fail("--since 时间看不懂: " + args[i]); }
+            }
+            else if (args[i] == "--until" && i + 1 < args.size())
+            {
+                options.until = app::parseLocalDateTime(args[++i], app::nowUtc());
+                if (!options.until) { return fail("--until 时间看不懂: " + args[i]); }
+            }
+            else if (args[i] == "--commit") { commit = true; }
+        }
+
+        const auto text = import::readTextFile(path);
+        if (!text) { return fail(text.error()); }
+        for (const auto& warning : text->warnings) { v.RenderError(warning); }
+
+        const auto chat = import::parseQqChat(text->utf8);
+
+        std::cout << "编码 " << text->encoding << "　消息 " << chat.messages.size() << " 条";
+        if (!chat.peer.empty()) { std::cout << "　对象 " << chat.peer; }
+        std::cout << '\n';
+
+        for (const auto& warning : chat.warnings) { v.RenderError(warning); }
+
+        auto imported = app::importChat(note, chat, options, commit);
+        if (!imported) { return fail(imported.error()); }
+
+        std::cout << "新增 " << imported->added << " 条，跳过重复 " << imported->duplicates
+                  << " 条，被规则过滤 " << imported->filtered << " 条"
+                  << (commit ? "（已写入）" : "（预览：加 --commit 才写入）") << '\n';
+
+        for (const auto& why : imported->notes) { std::cout << "  · " << why << '\n'; }
+        return 0;
+    }
+
     if (cmd == "list")
     {
         // 默认只看活的；--deleted 只看墓碑（恢复 / 彻底删之前要能看到 id）。
@@ -1185,7 +1250,8 @@ int run(const std::vector<std::string>& args, view::View& v)
     const bool needsId = (cmd == "show" || cmd == "confirm" || cmd == "rm" || cmd == "undo" ||
                           cmd == "purge");
 
-    if (cmd != "add" && cmd != "list" && cmd != "parse" && cmd != "draft" && cmd != "ledger" && !needsId)
+    if (cmd != "add" && cmd != "list" && cmd != "parse" && cmd != "draft" && cmd != "ledger" &&
+        cmd != "import-chat" && !needsId)
     {
         v.RenderError("不认识的命令: " + cmd + "（输入 note help 看用法）");
         return 1;

@@ -46,7 +46,9 @@ public:
     std::expected<Entry, std::string> add(std::string_view      rawText,
                                           std::chrono::sys_seconds createdAt,
                                           std::optional<TimeRange> occurred = std::nullopt,
-                                          TimeSource               source = TimeSource::Rule);
+                                          TimeSource               source = TimeSource::Rule,
+                                          std::string              sourceKey = {},
+                                          Source                   entrySource = Source::Manual);
 
     // 按 created_at 倒序（新的在前）。**不含已删除的**（墓碑对上层不可见）。
     const std::vector<Entry>& list() const;

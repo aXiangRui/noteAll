@@ -97,6 +97,7 @@ target_link_libraries(parse PUBLIC core)
 # ---------------------------------------------------------------------------
 add_library(app
     src/app/api_key.cpp
+    src/app/chat_import.cpp
     src/app/calendar.cpp
     src/app/corpus.cpp
     src/app/entry_service.cpp
@@ -113,6 +114,7 @@ target_link_libraries(app PUBLIC core parse)
 # ---------------------------------------------------------------------------
 add_library(import
     src/import/bill.cpp
+    src/import/chat.cpp
     src/import/charset.cpp
     src/import/csv.cpp
     src/import/importer.cpp)

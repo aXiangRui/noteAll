@@ -32,6 +32,7 @@ namespace core
         Manual,   // 手敲
         Import,   // 文件 / 批量导入
         WeChat,   // 微信聊天记录导出
+        Qq,       // QQ 聊天记录导出
     };
 
     struct TimeRange
@@ -103,6 +104,10 @@ namespace core
         // 没有它就只能凭感觉判断"规则够不够用"；有了它可以直接统计
         // rule / ai / manual 的分布，把 ai 那些原文变成下一批该补的规则。
         TimeSource  occurred_source = TimeSource::None;
+
+        // 导入去重键：同一份聊天记录导两次不能翻倍。
+        // 空 = 不是导入来的（手敲 / 命令行），不参与去重。
+        std::string source_key;
     };
 
     // 枚举 <-> 字符串。存字符串不存数字，见 docs/nlohmann-json.md §4.3。

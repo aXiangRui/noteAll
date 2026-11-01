@@ -49,6 +49,7 @@ namespace core
             case Source::Manual: return "manual";
             case Source::Import: return "import";
             case Source::WeChat: return "wechat";
+            case Source::Qq:     return "qq";
         }
 
         // 同 toString(Kind)：MSVC 不给兜底会报 C4715。
@@ -58,8 +59,8 @@ namespace core
 
     Source sourceFromString(std::string_view s)
     {
-        constexpr std::array<Source, 3> ALL_SOURCES = {
-            Source::Manual, Source::Import, Source::WeChat,
+        constexpr std::array<Source, 4> ALL_SOURCES = {
+            Source::Manual, Source::Import, Source::WeChat, Source::Qq,
         };
 
         for (const Source src : ALL_SOURCES)
